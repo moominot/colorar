@@ -1,5 +1,9 @@
 const CACHE = 'colorar-v1';
-const ASSETS = ['./colorar.html'];
+const ASSETS = [
+  './',
+  './index.html',
+  './colorar-manifest.json',
+];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)));
