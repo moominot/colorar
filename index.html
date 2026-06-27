@@ -503,6 +503,8 @@
     <div id="canvasWrapper">
       <canvas id="drawingCanvas"></canvas>
     </div>
+    <!-- Border overlay: NOT inside canvasWrapper so it doesn't scale with zoom -->
+    <canvas id="borderOverlay" style="position:absolute;top:0;left:0;pointer-events:none;display:none;"></canvas>
     <div id="pbnProgress"><div id="pbnProgressBar"></div></div>
   </div>
 </main>
@@ -652,6 +654,8 @@ function applyTransform() {
   document.getElementById('zoomLabel').textContent = pct;
   const lm = document.getElementById('zoomLabelMobile');
   if (lm) lm.textContent = pct;
+  // Redraw border overlay at new zoom/pan (zoom-invariant borders)
+  renderBorderOverlay();
 }
 
 function clampPan() {
@@ -1594,11 +1598,12 @@ function renderCanvas() {
   for (let i = 0; i < w * h; i++) {
     const li = i * 4;
 
+    // PBN borders are drawn on the overlay canvas (zoom-invariant), not here
     let isInk;
     if (currentMode === 'bw') {
       isInk = l[li] === 0 && l[li+3] === 255;
     } else if (currentMode === 'pbn') {
-      isInk = l[li] === 0 && l[li+1] === 0 && l[li+2] === 0 && l[li+3] === 255;
+      isInk = false;
     } else {
       isInk = (0.299*l[li] + 0.587*l[li+1] + 0.114*l[li+2]) < 128;
     }
@@ -1634,6 +1639,48 @@ function renderCanvas() {
   ctx.putImageData(out, 0, 0);
 
   if (currentMode === 'pbn' && pbnRegions) drawPBNNumbers();
+  renderBorderOverlay();
+}
+
+// ─── Border overlay (zoom-invariant PBN borders) ─────────────────────────────
+function renderBorderOverlay() {
+  const overlay = document.getElementById('borderOverlay');
+  if (currentMode !== 'pbn' || !pbnLabels || !linesImageData) {
+    overlay.style.display = 'none';
+    return;
+  }
+  const vw = viewport.clientWidth, vh = viewport.clientHeight;
+  if (overlay.width !== vw || overlay.height !== vh) {
+    overlay.width = vw; overlay.height = vh;
+  }
+  overlay.style.display = 'block';
+
+  const octx = overlay.getContext('2d');
+  const id = octx.createImageData(vw, vh);
+  const od = id.data;
+  const ldata = linesImageData.data;
+  const iw = canvas.width, ih = canvas.height;
+
+  // Border color and alpha by thickness level
+  const thick = document.getElementById('pbnBorderLive') ? +document.getElementById('pbnBorderLive').value : 1;
+  // Prim: gray semitransparent; Mitjà: darker; Gruixut: near-black
+  const [br, bg, bb, ba] = thick === 1 ? [90, 90, 90, 140]
+                          : thick === 2 ? [50, 50, 50, 200]
+                          :               [20, 20, 20, 240];
+
+  for (let sy = 0; sy < vh; sy++) {
+    for (let sx = 0; sx < vw; sx++) {
+      const ix = Math.floor((sx - panX) / zoom);
+      const iy = Math.floor((sy - panY) / zoom);
+      if (ix < 0 || iy < 0 || ix >= iw || iy >= ih) continue;
+      const li = (iy * iw + ix) * 4;
+      if (ldata[li] === 0 && ldata[li+3] === 255) {
+        const si = (sy * vw + sx) * 4;
+        od[si] = br; od[si+1] = bg; od[si+2] = bb; od[si+3] = ba;
+      }
+    }
+  }
+  octx.putImageData(id, 0, 0);
 }
 
 // ─── Draw PBN region numbers ──────────────────────────────────────────────────
