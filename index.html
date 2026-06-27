@@ -369,10 +369,16 @@
       border-radius: 8px;
       padding: 10px 12px;
       text-align: left;
+      display: flex; flex-direction: column; gap: 8px;
     }
-    .pbn-config label { font-size: 0.82rem; color: #555; display: flex; align-items: center; gap: 8px; }
-    .pbn-config input[type=range] { flex: 1; }
-    .pbn-config .kval { font-weight: 700; color: #333; min-width: 24px; }
+    .pbn-config label {
+      font-size: 0.82rem; color: #555;
+      display: grid;
+      grid-template-columns: 60px 1fr 28px;
+      align-items: center; gap: 6px;
+    }
+    .pbn-config input[type=range] { width: 100%; min-width: 0; }
+    .pbn-config .kval { font-weight: 700; color: #333; text-align: right; }
     .modal-option.opt-pbn .confirm-btn {
       margin-top: 10px;
       display: block; width: 100%;
@@ -521,6 +527,12 @@
             <input type="range" id="pbnK" min="4" max="24" value="12"
                    oninput="document.getElementById('pbnKVal').textContent=this.value">
             <span class="kval" id="pbnKVal">12</span>
+          </label>
+          <label>
+            Contorn:
+            <input type="range" id="pbnBorderThick" min="0" max="3" value="1"
+                   oninput="document.getElementById('pbnBorderThickVal').textContent=['Cap','Prim','Mitjà','Gruixut'][+this.value]">
+            <span class="kval" id="pbnBorderThickVal">Prim</span>
           </label>
         </div>
         <button class="confirm-btn" onclick="event.stopPropagation();confirmMode('pbn')">Començar ▶</button>
@@ -1253,8 +1265,20 @@ function onPBNDone(w, h, k, msg) {
   const visibles = pbnRegions.filter(r => r.size >= PBN_MIN_LABEL_SIZE).length;
   const statsEl = document.getElementById('pbnStats');
   statsEl.style.display = 'flex';
-  statsEl.innerHTML = `<span>${k} colors · ${visibles} zones numerades · Selecciona un color i omple les zones del mateix número</span>
-    <button class="btn btn-secondary" style="margin-left:10px;font-size:0.78rem;padding:5px 10px;" onclick="solvePBN()">✨ Resoldre</button>`;
+  const initThick = parseInt(document.getElementById('pbnBorderThick').value);
+  const thickLabels = ['Cap','Prim','Mitjà','Gruixut'];
+  statsEl.innerHTML = `
+    <span>${k} colors · ${visibles} zones · </span>
+    <label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;color:#555;">
+      Contorn:
+      <input type="range" id="pbnBorderLive" min="0" max="3" value="${initThick}" style="width:70px;"
+             oninput="document.getElementById('pbnBorderLiveVal').textContent=['Cap','Prim','Mitjà','Gruixut'][+this.value];rebuildPBNLines(+this.value)">
+      <span id="pbnBorderLiveVal">${thickLabels[initThick]}</span>
+    </label>
+    <button class="btn btn-secondary" style="font-size:0.78rem;padding:5px 10px;" onclick="solvePBN()">✨ Resoldre</button>`;
+
+  // Apply initial border thickness (worker always sends 1px lines)
+  if (initThick !== 1) rebuildPBNLines(initThick);
 
   const firstSwatch = document.querySelector('.pbn-swatch');
   if (firstSwatch) firstSwatch.click();
@@ -1394,6 +1418,44 @@ function findRegionCenters(labels, w, h, k) {
     });
   }
   return regions;
+}
+
+// ─── PBN Border rebuild ───────────────────────────────────────────────────────
+function rebuildPBNLines(thickness) {
+  if (!pbnLabels) return;
+  const w = canvas.width, h = canvas.height;
+  const n = w * h;
+  const lines = new Uint8ClampedArray(n * 4);
+
+  if (thickness === 0) {
+    // No border: all white
+    for (let i = 0; i < n * 4; i += 4) { lines[i]=255; lines[i+1]=255; lines[i+2]=255; lines[i+3]=255; }
+  } else {
+    // thickness 1→1px, 2→2px, 3→3px (check further neighbours)
+    const t = thickness; // pixels to check
+    const borderSet = new Uint8Array(n);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const label = pbnLabels[y*w+x];
+        outer: for (let dy = 0; dy <= t; dy++) {
+          for (let dx = (dy===0?1:0); dx <= t; dx++) {
+            if (dy===0&&dx===0) continue;
+            const nx = x+dx, ny = y+dy;
+            if (nx < w && pbnLabels[ny*w+nx] !== label) { borderSet[y*w+x]=1; break outer; }
+            if (ny < h && pbnLabels[(y+dy)*w+x] !== label) { borderSet[y*w+x]=1; break outer; }
+          }
+        }
+      }
+    }
+    for (let i = 0; i < n; i++) {
+      const li = i*4;
+      if (borderSet[i]) { lines[li]=0; lines[li+1]=0; lines[li+2]=0; lines[li+3]=255; }
+      else { lines[li]=255; lines[li+1]=255; lines[li+2]=255; lines[li+3]=255; }
+    }
+  }
+
+  linesImageData = new ImageData(lines, w, h);
+  renderCanvas();
 }
 
 // ─── PBN Solve ────────────────────────────────────────────────────────────────
