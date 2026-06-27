@@ -524,10 +524,19 @@
     <p>Tria el mode de coloració. El mode "Pintar per números" factoritza la imatge en zones numerades.</p>
     <div class="modal-options">
 
-      <div class="modal-option opt-bw" onclick="confirmMode('bw')">
+      <div class="modal-option opt-bw" onclick="event.stopPropagation()">
         <canvas id="previewBW" width="140" height="105"></canvas>
         <strong>Blanc i negre</strong>
         <small>Converteix a línies netes. Ideal per dibuixos de colorar.</small>
+        <div class="pbn-config" onclick="event.stopPropagation()">
+          <label>
+            Llindar:
+            <input type="range" id="bwThresh" min="10" max="245" value="128"
+                   oninput="document.getElementById('bwThreshVal').textContent=this.value;updateBWPreview()">
+            <span class="kval" id="bwThreshVal">128</span>
+          </label>
+        </div>
+        <button class="confirm-btn" style="background:#4f8ef7;color:#fff;" onclick="confirmMode('bw')">Començar ▶</button>
       </div>
 
       <div class="modal-option opt-orig" onclick="confirmMode('original')">
@@ -967,7 +976,7 @@ function showModeModal(raw) {
   document.getElementById('modeModal').classList.add('active');
 }
 
-function renderPreview(previewCanvas, raw, mode) {
+function renderPreview(previewCanvas, raw, mode, thresh) {
   const maxW = 140, maxH = 105;
   const scale = Math.min(maxW / raw.w, maxH / raw.h);
   const dw = Math.round(raw.w * scale), dh = Math.round(raw.h * scale);
@@ -978,14 +987,21 @@ function renderPreview(previewCanvas, raw, mode) {
   tmp.getContext('2d').putImageData(raw.data, 0, 0);
   pCtx.drawImage(tmp, 0, 0, dw, dh);
   if (mode === 'bw') {
+    const t = thresh !== undefined ? thresh : 128;
     const id = pCtx.getImageData(0, 0, dw, dh);
     for (let i = 0; i < dw*dh; i++) {
       const g = 0.299*id.data[i*4] + 0.587*id.data[i*4+1] + 0.114*id.data[i*4+2];
-      const v = g < 128 ? 0 : 255;
+      const v = g < t ? 0 : 255;
       id.data[i*4] = id.data[i*4+1] = id.data[i*4+2] = v; id.data[i*4+3] = 255;
     }
     pCtx.putImageData(id, 0, 0);
   }
+}
+
+function updateBWPreview() {
+  if (!pendingRaw) return;
+  const t = parseInt(document.getElementById('bwThresh').value);
+  renderPreview(document.getElementById('previewBW'), pendingRaw, 'bw', t);
 }
 
 function confirmMode(mode) {
@@ -995,41 +1011,70 @@ function confirmMode(mode) {
     const k = parseInt(document.getElementById('pbnK').value);
     startPBN(pendingRaw, k);
   } else {
-    applyModeAndStart(pendingRaw, mode);
+    const thresh = mode === 'bw' ? parseInt(document.getElementById('bwThresh').value) : 128;
+    applyModeAndStart(pendingRaw, mode, thresh);
   }
   pendingRaw = null;
 }
 
 // ─── B&W / Original modes ─────────────────────────────────────────────────────
-function applyModeAndStart(raw, mode) {
+let bwThreshold = 128; // current BW threshold (stored for live recalculation)
+let bwSourceRaw = null; // original raw ImageData for BW recalculation
+
+function applyModeAndStart(raw, mode, thresh) {
+  bwThreshold = (mode === 'bw' && thresh !== undefined) ? thresh : 128;
+  if (mode === 'bw') bwSourceRaw = raw; else bwSourceRaw = null;
   showLoading('Processant línies...');
   setTimeout(() => {
     canvas.width = raw.w; canvas.height = raw.h;
-    pbnLabels = null; pbnColors = null; pbnRegions = null; pbnWhiteUnfilled = false; pbnHighlightIdx = -1;
-    processImageBWOrOrig(raw.data, raw.w, raw.h, mode);
+    pbnLabels = null; pbnColors = null; pbnRegions = null; pbnWhiteUnfilled = false; pbnHighlightIdx = -1; bwSourceRaw = null;
+    processImageBWOrOrig(raw.data, raw.w, raw.h, mode, bwThreshold);
     finishLoad(raw.w, raw.h, mode === 'bw' ? '🖊 Blanc i negre' : '🌈 Original');
     buildDefaultPalette();
     document.getElementById('tolWrap').style.display = '';
     document.getElementById('pbnStats').style.display = 'none';
+    if (mode === 'bw') showBWThreshBar();
   }, 50);
 }
 
-function processImageBWOrOrig(rawData, w, h, mode) {
+function processImageBWOrOrig(rawData, w, h, mode, thresh) {
+  const t = (mode === 'bw' && thresh !== undefined) ? thresh : 128;
   const src   = rawData.data;
   const lines = new Uint8ClampedArray(w * h * 4);
   const colors = new Uint8ClampedArray(w * h * 4);
   for (let i = 0; i < w * h; i++) {
     const r = src[i*4], g = src[i*4+1], b = src[i*4+2];
     const gray = 0.299*r + 0.587*g + 0.114*b;
-    lines[i*4]   = mode === 'bw' ? (gray < 128 ? 0 : 255) : r;
-    lines[i*4+1] = mode === 'bw' ? (gray < 128 ? 0 : 255) : g;
-    lines[i*4+2] = mode === 'bw' ? (gray < 128 ? 0 : 255) : b;
+    lines[i*4]   = mode === 'bw' ? (gray < t ? 0 : 255) : r;
+    lines[i*4+1] = mode === 'bw' ? (gray < t ? 0 : 255) : g;
+    lines[i*4+2] = mode === 'bw' ? (gray < t ? 0 : 255) : b;
     lines[i*4+3] = 255;
     colors[i*4+3] = 0;
   }
   linesImageData = new ImageData(lines, w, h);
   colorLayer     = new ImageData(colors, w, h);
   renderCanvas();
+}
+
+function showBWThreshBar() {
+  const statsEl = document.getElementById('pbnStats');
+  statsEl.style.display = 'flex';
+  statsEl.innerHTML = `
+    <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:#555;">
+      Llindar B/N:
+      <input type="range" id="bwThreshLive" min="10" max="245" value="${bwThreshold}" style="width:90px;"
+             oninput="applyBWThreshLive(+this.value)">
+      <span id="bwThreshLiveVal">${bwThreshold}</span>
+    </label>`;
+}
+
+function applyBWThreshLive(t) {
+  bwThreshold = t;
+  document.getElementById('bwThreshLiveVal').textContent = t;
+  if (!bwSourceRaw) return;
+  undoStack = []; redoStack = []; // threshold change resets undo history
+  processImageBWOrOrig(bwSourceRaw.data, bwSourceRaw.w, bwSourceRaw.h, 'bw', t);
+  scheduleAutosave();
 }
 
 // ─── Paint-by-numbers ─────────────────────────────────────────────────────────
@@ -1921,6 +1966,7 @@ function doAutosave() {
         mode: currentMode, w: canvas.width, h: canvas.height,
         lines:  imageDataToURL(linesImageData),
         colors: imageDataToURL(colorLayer),
+        bwThreshold: currentMode === 'bw' ? bwThreshold : undefined,
       };
     }
     localStorage.setItem(LS_KEY, JSON.stringify(payload));
@@ -2004,8 +2050,15 @@ async function restoreSession() {
       colorLayer     = await dataURLtoImageData(saved.colors, w, h);
       buildDefaultPalette();
       document.getElementById('tolWrap').style.display = '';
-      document.getElementById('pbnStats').style.display = 'none';
-      pbnLabels = null; pbnColors = null; pbnRegions = null; pbnWhiteUnfilled = false; pbnHighlightIdx = -1;
+      pbnLabels = null; pbnColors = null; pbnRegions = null; pbnWhiteUnfilled = false; pbnHighlightIdx = -1; bwSourceRaw = null;
+      if (mode === 'bw' && saved.bwThreshold) {
+        bwThreshold = saved.bwThreshold;
+        showBWThreshBar();
+        document.getElementById('bwThreshLive').value = bwThreshold;
+        document.getElementById('bwThreshLiveVal').textContent = bwThreshold;
+      } else {
+        document.getElementById('pbnStats').style.display = 'none';
+      }
     }
 
     renderCanvas();
