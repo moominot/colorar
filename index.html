@@ -1006,7 +1006,8 @@ self.onmessage = function(e) {
     for (let x = 0; x < w; x++) {
       const i = y*w+x, li = i*4;
       const label = labels[i];
-      const isBorder = (x>0&&labels[i-1]!==label)||(x<w-1&&labels[i+1]!==label)||(y>0&&labels[i-w]!==label)||(y<h-1&&labels[i+w]!==label);
+      // Marca bord només cap a la dreta i cap avall → línies d'1px en lloc de 2px
+      const isBorder = (x<w-1&&labels[i+1]!==label)||(y<h-1&&labels[i+w]!==label);
       if (isBorder) { lines[li]=0; lines[li+1]=0; lines[li+2]=0; lines[li+3]=255; }
       else          { lines[li]=255; lines[li+1]=255; lines[li+2]=255; lines[li+3]=255; }
     }
