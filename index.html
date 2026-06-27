@@ -289,6 +289,7 @@
       display: none;
       font-size: 0.8rem; color: #555; text-align: center;
       background: #fff; border-radius: 8px; padding: 6px 14px;
+      align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px;
     }
 
     /* Wrong color flash */
@@ -1251,8 +1252,9 @@ function onPBNDone(w, h, k, msg) {
 
   const visibles = pbnRegions.filter(r => r.size >= PBN_MIN_LABEL_SIZE).length;
   const statsEl = document.getElementById('pbnStats');
-  statsEl.style.display = 'block';
-  statsEl.textContent = `${k} colors · ${visibles} zones numerades · Selecciona un color i omple les zones del mateix número`;
+  statsEl.style.display = 'flex';
+  statsEl.innerHTML = `<span>${k} colors · ${visibles} zones numerades · Selecciona un color i omple les zones del mateix número</span>
+    <button class="btn btn-secondary" style="margin-left:10px;font-size:0.78rem;padding:5px 10px;" onclick="solvePBN()">✨ Resoldre</button>`;
 
   const firstSwatch = document.querySelector('.pbn-swatch');
   if (firstSwatch) firstSwatch.click();
@@ -1392,6 +1394,25 @@ function findRegionCenters(labels, w, h, k) {
     });
   }
   return regions;
+}
+
+// ─── PBN Solve ────────────────────────────────────────────────────────────────
+function solvePBN() {
+  if (!pbnLabels || !pbnColors) return;
+  undoStack.push(colorLayer.data.slice());
+  redoStack = [];
+  const c = colorLayer.data;
+  const n = pbnLabels.length;
+  for (let i = 0; i < n; i++) {
+    const [r, g, b] = pbnColors[pbnLabels[i]];
+    const li = i * 4;
+    c[li]   = Math.round(r);
+    c[li+1] = Math.round(g);
+    c[li+2] = Math.round(b);
+    c[li+3] = 255;
+  }
+  renderCanvas();
+  scheduleAutosave();
 }
 
 // ─── Render canvas ────────────────────────────────────────────────────────────
