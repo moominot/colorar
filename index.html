@@ -292,6 +292,10 @@
       align-items: center; justify-content: center; flex-wrap: wrap; gap: 4px;
     }
 
+    /* Color picker mode */
+    body.picker-mode #canvasViewport { cursor: crosshair; }
+    #pickerSwatch.active { background: #4f8ef7 !important; color: #fff !important; border-color: #333 !important; }
+
     /* Wrong color flash */
     #wrongFlash {
       position: fixed; inset: 0; z-index: 150;
@@ -458,6 +462,19 @@
     <label title="Color personalitzat"><input type="color" id="customColor" value="#ff0000" onchange="selectCustomColor(this.value)"></label>
   </div>
   <div class="color-swatch eraser" id="eraserSwatch" onclick="selectEraser()" title="Goma d'esborrar">✕</div>
+  <div class="color-swatch eraser" id="pickerSwatch" onclick="toggleColorPicker()" title="Quina color és?">?</div>
+</div>
+
+<!-- Color picker tooltip -->
+<div id="pickerTooltip" style="
+  display:none; position:fixed; z-index:500;
+  background:#fff; border-radius:10px; padding:8px 12px;
+  box-shadow:0 4px 18px rgba(0,0,0,0.22);
+  font-size:0.82rem; color:#333; white-space:nowrap;
+  pointer-events:none; align-items:center; gap:8px;
+">
+  <div id="pickerPreview" style="width:22px;height:22px;border-radius:50%;border:2px solid #ccc;flex-shrink:0;"></div>
+  <span id="pickerLabel"></span>
 </div>
 
 <main>
@@ -790,6 +807,7 @@ function buildPBNPalette(colors) {
 }
 
 function selectColor(color, el) {
+  cancelColorPicker();
   selectedColor = color;
   selectedPBNIdx = -1;
   document.querySelectorAll('.color-swatch, .pbn-swatch').forEach(s => s.classList.remove('selected'));
@@ -807,14 +825,65 @@ function selectPBNColor(idx, el, rgb) {
 }
 
 function selectCustomColor(color) {
+  cancelColorPicker();
   selectedColor = color;
   document.querySelectorAll('.color-swatch, .pbn-swatch').forEach(s => s.classList.remove('selected'));
 }
 
 function selectEraser() {
+  cancelColorPicker();
   selectedColor = null;
   document.querySelectorAll('.color-swatch, .pbn-swatch').forEach(s => s.classList.remove('selected'));
   document.getElementById('eraserSwatch').classList.add('selected');
+}
+
+// ─── Color picker (?) ─────────────────────────────────────────────────────────
+let pickerMode = false;
+
+function toggleColorPicker() {
+  pickerMode ? cancelColorPicker() : activateColorPicker();
+}
+
+function activateColorPicker() {
+  pickerMode = true;
+  document.getElementById('pickerSwatch').classList.add('active');
+  document.body.classList.add('picker-mode');
+}
+
+function cancelColorPicker() {
+  pickerMode = false;
+  document.getElementById('pickerSwatch').classList.remove('active');
+  document.body.classList.remove('picker-mode');
+  hidePickerTooltip();
+}
+
+function hidePickerTooltip() {
+  document.getElementById('pickerTooltip').style.display = 'none';
+}
+
+function showPickerTooltip(hex, name, clientX, clientY) {
+  const tip = document.getElementById('pickerTooltip');
+  tip.style.display = 'flex';
+  document.getElementById('pickerPreview').style.background = hex;
+  document.getElementById('pickerLabel').textContent = name;
+  // Position above the cursor
+  tip.style.left = (clientX - 10) + 'px';
+  tip.style.top  = (clientY - 52) + 'px';
+}
+
+function pickColorAt(e) {
+  const rect = canvas.getBoundingClientRect();
+  const scaleX = rect.width  / canvas.width;
+  const scaleY = rect.height / canvas.height;
+  const x = Math.floor((e.clientX - rect.left) / scaleX);
+  const y = Math.floor((e.clientY - rect.top)  / scaleY);
+  if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return;
+
+  // Read from rendered canvas
+  const px = ctx.getImageData(x, y, 1, 1).data;
+  const hex = '#' + [px[0], px[1], px[2]].map(v => v.toString(16).padStart(2,'0')).join('');
+  const rgb = `rgb(${px[0]},${px[1]},${px[2]})`;
+  showPickerTooltip(hex, `${hex.toUpperCase()}  ·  ${rgb}`, e.clientX, e.clientY);
 }
 
 document.getElementById('tolerance').addEventListener('input', function() {
@@ -1557,6 +1626,7 @@ canvas.addEventListener('touchend', e => {
 });
 
 function handleCanvasClick(e) {
+  if (pickerMode) { pickColorAt(e); return; }
   if (!linesImageData) return;
   // Use rect ratio instead of zoom variable to correctly map CSS pixels → canvas pixels
   const rect = canvas.getBoundingClientRect();
@@ -1830,6 +1900,13 @@ function closeHamburger() {
   document.getElementById('hamburgerPanel').classList.remove('open');
   document.getElementById('hamburgerBtn').classList.remove('active');
 }
+
+// Hide picker tooltip on any outside click
+document.addEventListener('click', function(e) {
+  if (pickerMode && !canvas.contains(e.target) && e.target.id !== 'pickerSwatch') {
+    cancelColorPicker();
+  }
+});
 
 // Close hamburger when clicking outside
 document.addEventListener('click', function(e) {
