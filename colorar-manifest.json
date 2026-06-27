@@ -2,7 +2,7 @@
   "name": "Joc de Colorar",
   "short_name": "Colorar",
   "description": "Colorar dibuixos en blanc i negre directament al navegador",
-  "start_url": "./colorar.html",
+  "start_url": "./",
   "display": "standalone",
   "background_color": "#f0f4f8",
   "theme_color": "#4f8ef7",
