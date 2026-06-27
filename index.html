@@ -875,11 +875,11 @@ function editPBNColor(idx, swatchEl) {
     const ng = parseInt(hex.slice(3,5),16);
     const nb = parseInt(hex.slice(5,7),16);
     pbnColors[idx] = [nr, ng, nb];
-    // Update colorLayer pixels for this label
+    // Update only already-painted pixels of this label
     if (colorLayer && pbnLabels) {
       const d = colorLayer.data;
       for (let p = 0; p < pbnLabels.length; p++) {
-        if (pbnLabels[p] === idx) {
+        if (pbnLabels[p] === idx && d[p*4+3] > 0) {
           const o = p * 4;
           d[o] = nr; d[o+1] = ng; d[o+2] = nb; d[o+3] = 255;
         }
@@ -2019,14 +2019,27 @@ function doAutosave() {
       // PBN / BW-regions: save labels + color palette + fill map (no PNG)
       let binStr = '';
       for (let i = 0; i < pbnLabels.length; i++) binStr += String.fromCharCode(pbnLabels[i]);
+      // fillMap: pixelIdx → '#rrggbb', one representative per painted connected region
       const fillMap = {};
       const c = colorLayer.data;
+      const cw = canvas.width;
+      const fVisited = new Uint8Array(pbnLabels.length);
       for (let i = 0; i < pbnLabels.length; i++) {
-        const li = i * 4;
-        if (c[li+3] > 0) {
-          const label = pbnLabels[i];
-          if (fillMap[label] === undefined) {
-            fillMap[label] = '#' + [c[li], c[li+1], c[li+2]].map(v => v.toString(16).padStart(2,'0')).join('');
+        if (fVisited[i]) continue;
+        fVisited[i] = 1;
+        if (c[i*4+3] === 0) continue;
+        const label = pbnLabels[i];
+        const hex = '#' + [c[i*4], c[i*4+1], c[i*4+2]].map(v => v.toString(16).padStart(2,'0')).join('');
+        fillMap[i] = hex;
+        // BFS to mark all connected pixels of this painted region as visited
+        const q = [i]; let head = 0;
+        while (head < q.length) {
+          const pos = q[head++];
+          const px = pos % cw, py = (pos - px) / cw;
+          for (const n of [px>0?pos-1:-1, px<cw-1?pos+1:-1, py>0?pos-cw:-1, py<canvas.height-1?pos+cw:-1]) {
+            if (n < 0 || fVisited[n]) continue;
+            fVisited[n] = 1;
+            if (pbnLabels[n] === label && c[n*4+3] > 0) q.push(n);
           }
         }
       }
@@ -2098,15 +2111,11 @@ async function restoreSession() {
       const thick = saved.pbnBorderThick !== undefined ? saved.pbnBorderThick : 1;
       rebuildPBNLines(thick, true);
       if (saved.pbnFillMap) {
-        const c = colorLayer.data;
-        const fillMap = saved.pbnFillMap;
-        for (let i = 0; i < pbnLabels.length; i++) {
-          const hex = fillMap[pbnLabels[i]];
-          if (hex) {
-            const [r,g,b] = hexToRGB(hex);
-            const li = i * 4;
-            c[li] = r; c[li+1] = g; c[li+2] = b; c[li+3] = 255;
-          }
+        // Each entry is pixelIdx → '#rrggbb'; flood-fill from that pixel to restore exactly the painted region
+        for (const [pixStr, hex] of Object.entries(saved.pbnFillMap)) {
+          const pixIdx = +pixStr;
+          const x = pixIdx % w, y = Math.floor(pixIdx / w);
+          floodFill(x, y, hex);
         }
       }
 
