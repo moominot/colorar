@@ -1650,6 +1650,7 @@ function renderBorderOverlay() {
     return;
   }
   const vw = viewport.clientWidth, vh = viewport.clientHeight;
+  if (!vw || !vh) return; // viewport not yet visible
   if (overlay.width !== vw || overlay.height !== vh) {
     overlay.width = vw; overlay.height = vh;
   }
