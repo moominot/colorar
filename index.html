@@ -762,109 +762,280 @@ function processImageBWOrOrig(rawData, w, h, mode) {
 }
 
 // ─── Paint-by-numbers ─────────────────────────────────────────────────────────
+
+// Worker inline com a Blob per evitar un fitxer extern
+const PBN_WORKER_SRC = `
+const PBN_MAX_SAMPLES = 20000;
+
+function kmeanspp(samples, k) {
+  const n = samples.length / 3;
+  const centroids = new Float32Array(k * 3);
+  const idx0 = Math.floor(Math.random() * n);
+  centroids[0] = samples[idx0*3]; centroids[1] = samples[idx0*3+1]; centroids[2] = samples[idx0*3+2];
+  let nc = 1;
+  const dists = new Float32Array(n);
+  while (nc < k) {
+    let total = 0;
+    for (let i = 0; i < n; i++) {
+      let minD = Infinity;
+      for (let j = 0; j < nc; j++) {
+        const dr = samples[i*3]-centroids[j*3], dg = samples[i*3+1]-centroids[j*3+1], db = samples[i*3+2]-centroids[j*3+2];
+        const d = dr*dr + dg*dg + db*db;
+        if (d < minD) minD = d;
+      }
+      dists[i] = minD; total += minD;
+    }
+    let r = Math.random() * total;
+    for (let i = 0; i < n; i++) {
+      r -= dists[i];
+      if (r <= 0) {
+        centroids[nc*3] = samples[i*3]; centroids[nc*3+1] = samples[i*3+1]; centroids[nc*3+2] = samples[i*3+2];
+        nc++; break;
+      }
+    }
+    if (nc <= (nc|0) && nc < k) { // fallback
+      const fi = Math.floor(Math.random() * n);
+      centroids[nc*3] = samples[fi*3]; centroids[nc*3+1] = samples[fi*3+1]; centroids[nc*3+2] = samples[fi*3+2];
+      nc++;
+    }
+  }
+  return centroids;
+}
+
+function kmeans(samples, centroids, k, maxIter, onIter) {
+  const n = samples.length / 3;
+  const sums = new Float32Array(k * 3);
+  const counts = new Int32Array(k);
+  const c = centroids.slice();
+  for (let iter = 0; iter < maxIter; iter++) {
+    const t0 = Date.now();
+    sums.fill(0); counts.fill(0);
+    for (let i = 0; i < n; i++) {
+      const r = samples[i*3], g = samples[i*3+1], b = samples[i*3+2];
+      let best = 0, bestD = Infinity;
+      for (let j = 0; j < k; j++) {
+        const dr = r-c[j*3], dg = g-c[j*3+1], db = b-c[j*3+2];
+        const d = dr*dr + dg*dg + db*db;
+        if (d < bestD) { bestD = d; best = j; }
+      }
+      sums[best*3] += r; sums[best*3+1] += g; sums[best*3+2] += b;
+      counts[best]++;
+    }
+    let moved = false;
+    for (let j = 0; j < k; j++) {
+      if (counts[j] > 0) {
+        const nr = sums[j*3]/counts[j], ng = sums[j*3+1]/counts[j], nb = sums[j*3+2]/counts[j];
+        if (Math.abs(nr-c[j*3])>0.5 || Math.abs(ng-c[j*3+1])>0.5 || Math.abs(nb-c[j*3+2])>0.5) moved = true;
+        c[j*3] = nr; c[j*3+1] = ng; c[j*3+2] = nb;
+      }
+    }
+    onIter(iter, Date.now() - t0, moved);
+    if (!moved) break;
+  }
+  return c;
+}
+
+function assignLabels(data, w, h, centroids, k) {
+  const labels = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const r = data[i*4], g = data[i*4+1], b = data[i*4+2];
+    let best = 0, bestD = Infinity;
+    for (let j = 0; j < k; j++) {
+      const dr = r-centroids[j*3], dg = g-centroids[j*3+1], db = b-centroids[j*3+2];
+      const d = dr*dr + dg*dg + db*db;
+      if (d < bestD) { bestD = d; best = j; }
+    }
+    labels[i] = best;
+  }
+  return labels;
+}
+
+function findRegionCenters(labels, w, h, PBN_MIN_LABEL_SIZE) {
+  const visited = new Uint8Array(w * h);
+  const regions = [];
+  for (let start = 0; start < w * h; start++) {
+    if (visited[start]) continue;
+    const colorIdx = labels[start];
+    const queue = [start];
+    visited[start] = 1;
+    let sumX = 0, sumY = 0, size = 0;
+    while (queue.length) {
+      const pos = queue.pop();
+      const px = pos % w, py = (pos - px) / w;
+      sumX += px; sumY += py; size++;
+      const n0=px>0?pos-1:-1, n1=px<w-1?pos+1:-1, n2=py>0?pos-w:-1, n3=py<h-1?pos+w:-1;
+      for (const n of [n0,n1,n2,n3]) {
+        if (n<0||visited[n]||labels[n]!==colorIdx) continue;
+        visited[n]=1; queue.push(n);
+      }
+    }
+    regions.push({ colorIdx, cx: Math.round(sumX/size), cy: Math.round(sumY/size), size });
+  }
+  return regions;
+}
+
+self.onmessage = function(e) {
+  const { data, w, h, k } = e.data;
+  const totalPx = w * h;
+  console.log('[Worker PBN] inici — imatge ' + w + 'x' + h + ' (' + totalPx + ' px), k=' + k);
+
+  // Mostreig
+  const t0 = Date.now();
+  const step = Math.max(1, Math.ceil(Math.sqrt(totalPx / PBN_MAX_SAMPLES)));
+  const sampleCount = Math.ceil(h / step) * Math.ceil(w / step);
+  const samples = new Float32Array(sampleCount * 3);
+  let si = 0;
+  for (let y = 0; y < h; y += step)
+    for (let x = 0; x < w; x += step) {
+      const i = (y * w + x) * 4;
+      samples[si++] = data[i]; samples[si++] = data[i+1]; samples[si++] = data[i+2];
+    }
+  const actualSamples = si / 3;
+  const samplesView = samples.subarray(0, si);
+  console.log('[Worker PBN] mostreig: ' + actualSamples + ' mostres, step=' + step + ', ' + (Date.now()-t0) + 'ms');
+  self.postMessage({ type: 'progress', pct: 8, msg: 'Inicialitzant colors...' });
+
+  // K-means++
+  const t1 = Date.now();
+  const initCentroids = kmeanspp(samplesView, k);
+  console.log('[Worker PBN] kmeans++: ' + (Date.now()-t1) + 'ms');
+  self.postMessage({ type: 'progress', pct: 18, msg: 'Analitzant colors...' });
+
+  // K-means
+  const t2 = Date.now();
+  const finalCentroids = kmeans(samplesView, initCentroids, k, 20, (iter, ms, moved) => {
+    console.log('[Worker PBN] kmeans iter ' + (iter+1) + ': ' + ms + 'ms' + (!moved ? ' — convergit' : ''));
+    self.postMessage({ type: 'progress', pct: 18 + (iter+1)/20*45, msg: 'Analitzant colors... (iter '+(iter+1)+')' });
+  });
+  console.log('[Worker PBN] kmeans total: ' + (Date.now()-t2) + 'ms');
+  self.postMessage({ type: 'progress', pct: 65, msg: 'Assignant regions...' });
+
+  // Ordenar colors per to
+  const colorsArr = [];
+  for (let j = 0; j < k; j++) colorsArr.push([finalCentroids[j*3], finalCentroids[j*3+1], finalCentroids[j*3+2]]);
+  colorsArr.sort((a, b) => {
+    const ha = rgbHue(a), hb = rgbHue(b);
+    if (Math.abs(ha-hb) > 15) return ha - hb;
+    return (0.299*a[0]+0.587*a[1]+0.114*a[2]) - (0.299*b[0]+0.587*b[1]+0.114*b[2]);
+  });
+  function rgbHue([r,g,b]) {
+    r/=255; g/=255; b/=255;
+    const max=Math.max(r,g,b), min=Math.min(r,g,b);
+    if (max===min) return 0;
+    let h;
+    if (max===r) h=(g-b)/(max-min);
+    else if (max===g) h=2+(b-r)/(max-min);
+    else h=4+(r-g)/(max-min);
+    return ((h*60)+360)%360;
+  }
+  const sortedFlat = new Float32Array(k * 3);
+  colorsArr.forEach(([r,g,b], j) => { sortedFlat[j*3]=r; sortedFlat[j*3+1]=g; sortedFlat[j*3+2]=b; });
+
+  // Assignar etiquetes a tots els píxels
+  const t3 = Date.now();
+  const labels = assignLabels(data, w, h, sortedFlat, k);
+  console.log('[Worker PBN] assignLabels: ' + (Date.now()-t3) + 'ms');
+  self.postMessage({ type: 'progress', pct: 78, msg: 'Construint línies...' });
+
+  // Construir capa de línies
+  const t4 = Date.now();
+  const lines = new Uint8ClampedArray(totalPx * 4);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const i = y*w+x, li = i*4;
+      const label = labels[i];
+      const isBorder = (x>0&&labels[i-1]!==label)||(x<w-1&&labels[i+1]!==label)||(y>0&&labels[i-w]!==label)||(y<h-1&&labels[i+w]!==label);
+      if (isBorder) { lines[li]=0; lines[li+1]=0; lines[li+2]=0; lines[li+3]=255; }
+      else          { lines[li]=255; lines[li+1]=255; lines[li+2]=255; lines[li+3]=255; }
+    }
+  }
+  console.log('[Worker PBN] línies: ' + (Date.now()-t4) + 'ms');
+  self.postMessage({ type: 'progress', pct: 88, msg: 'Trobant regions...' });
+
+  // Components connexos
+  const t5 = Date.now();
+  const regions = findRegionCenters(labels, w, h, 120);
+  console.log('[Worker PBN] regions: ' + regions.length + ' en ' + (Date.now()-t5) + 'ms');
+  console.log('[Worker PBN] TOTAL: ' + (Date.now()-t0) + 'ms');
+
+  self.postMessage({
+    type: 'done',
+    colors: colorsArr,
+    labels: labels.buffer,
+    lines: lines.buffer,
+    regions,
+  }, [labels.buffer, lines.buffer]);
+};
+`;
+
+let pbnWorker = null;
+
 function startPBN(raw, k) {
   showLoading(`Analitzant colors (${k} colors)…`);
   document.getElementById('pbnProgress').style.display = 'block';
   document.getElementById('pbnProgressBar').style.width = '0%';
-  setTimeout(() => runPBN(raw, k), 80);
+
+  // Mata worker anterior si n'hi ha
+  if (pbnWorker) { pbnWorker.terminate(); pbnWorker = null; }
+
+  const blob = new Blob([PBN_WORKER_SRC], { type: 'application/javascript' });
+  pbnWorker = new Worker(URL.createObjectURL(blob));
+
+  pbnWorker.onmessage = e => {
+    const msg = e.data;
+    if (msg.type === 'progress') {
+      setProgress(msg.pct);
+      document.getElementById('loadingMsg').textContent = msg.msg;
+    } else if (msg.type === 'done') {
+      pbnWorker = null;
+      onPBNDone(raw.w, raw.h, k, msg);
+    }
+  };
+
+  pbnWorker.onerror = err => {
+    console.error('[Worker PBN] error:', err);
+    pbnWorker = null;
+    hideLoading();
+    alert('Error processant la imatge. Torna a intentar-ho.');
+  };
+
+  // Transferim el buffer de dades per evitar còpia
+  const dataCopy = new Uint8ClampedArray(raw.data.data.buffer.slice(0));
+  pbnWorker.postMessage({ data: dataCopy, w: raw.w, h: raw.h, k }, [dataCopy.buffer]);
 }
 
 function setProgress(pct) {
   document.getElementById('pbnProgressBar').style.width = pct + '%';
 }
 
-function runPBN(raw, k) {
-  const { data, w, h } = raw;
+function onPBNDone(w, h, k, msg) {
   canvas.width = w; canvas.height = h;
-  console.time('[PBN] total');
-  console.log(`[PBN] inici — imatge ${w}×${h} (${w*h} px), k=${k}`);
+  pbnColors  = msg.colors;
+  pbnLabels  = new Uint8Array(msg.labels);
+  pbnRegions = msg.regions;
 
-  setProgress(5);
-  console.time('[PBN] mostreig');
-  const step = Math.max(1, Math.ceil(Math.sqrt(w * h / 60000)));
-  const samples = [];
-  for (let y = 0; y < h; y += step)
-    for (let x = 0; x < w; x += step) {
-      const i = (y * w + x) * 4;
-      samples.push([data[i], data[i+1], data[i+2]]);
-    }
-  console.timeEnd('[PBN] mostreig');
-  console.log(`[PBN] mostres: ${samples.length} (step=${step})`);
-
-  setProgress(10);
-  console.time('[PBN] kmeans++');
-  const centroids = kmeanspp(samples, k);
-  console.timeEnd('[PBN] kmeans++');
-
-  setProgress(20);
-  console.time('[PBN] kmeans iteracions');
-  const finalCentroids = kmeans(samples, centroids, 30, (p, iter) => {
-    setProgress(20 + p * 0.4);
-    if (iter !== undefined) console.log(`[PBN] kmeans iteració ${iter+1}/30`);
-  });
-  console.timeEnd('[PBN] kmeans iteracions');
-
-  const sorted = sortColors(finalCentroids);
-  pbnColors = sorted;
-  setProgress(65);
-
-  console.time('[PBN] assignLabels');
-  pbnLabels = assignLabels(data, w, h, sorted);
-  console.timeEnd('[PBN] assignLabels');
-  setProgress(78);
-
-  console.time('[PBN] construcció línies');
-  const lines  = new Uint8ClampedArray(w * h * 4);
-  const colors = new Uint8ClampedArray(w * h * 4);
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const i  = y * w + x;
-      const li = i * 4;
-      const label = pbnLabels[i];
-      let isBorder = false;
-      if (x > 0   && pbnLabels[i-1] !== label) isBorder = true;
-      if (x < w-1 && pbnLabels[i+1] !== label) isBorder = true;
-      if (y > 0   && pbnLabels[i-w] !== label) isBorder = true;
-      if (y < h-1 && pbnLabels[i+w] !== label) isBorder = true;
-
-      if (isBorder) {
-        lines[li] = 0; lines[li+1] = 0; lines[li+2] = 0; lines[li+3] = 255;
-      } else {
-        lines[li] = 255; lines[li+1] = 255; lines[li+2] = 255; lines[li+3] = 255;
-      }
-      colors[li+3] = 0;
-    }
-  }
+  const lines = new Uint8ClampedArray(msg.lines);
   linesImageData = new ImageData(lines, w, h);
-  colorLayer     = new ImageData(colors, w, h);
-  console.timeEnd('[PBN] construcció línies');
-  setProgress(88);
+  colorLayer     = new ImageData(new Uint8ClampedArray(w * h * 4), w, h);
 
-  console.time('[PBN] regions connexes');
-  pbnRegions = findRegionCenters(pbnLabels, w, h, k);
-  console.timeEnd('[PBN] regions connexes');
-  console.log(`[PBN] regions trobades: ${pbnRegions.length} (visibles ≥${PBN_MIN_LABEL_SIZE}px: ${pbnRegions.filter(r=>r.size>=PBN_MIN_LABEL_SIZE).length})`);
-  setProgress(96);
-
-  console.time('[PBN] renderCanvas');
+  setProgress(98);
   renderCanvas();
-  console.timeEnd('[PBN] renderCanvas');
-  console.timeEnd('[PBN] total');
   setProgress(100);
 
   document.getElementById('pbnProgress').style.display = 'none';
   finishLoad(w, h, '🔢 Pintar per números');
-  buildPBNPalette(sorted);
+  buildPBNPalette(pbnColors);
   document.getElementById('tolWrap').style.display = 'none';
 
-  const totalRegions = pbnRegions.filter(r => r.size >= PBN_MIN_LABEL_SIZE).length;
+  const visibles = pbnRegions.filter(r => r.size >= PBN_MIN_LABEL_SIZE).length;
   const statsEl = document.getElementById('pbnStats');
   statsEl.style.display = 'block';
-  statsEl.textContent = `${k} colors · ${totalRegions} zones numerades · Selecciona un color i omple les zones del mateix número`;
+  statsEl.textContent = `${k} colors · ${visibles} zones numerades · Selecciona un color i omple les zones del mateix número`;
 
   const firstSwatch = document.querySelector('.pbn-swatch');
   if (firstSwatch) firstSwatch.click();
 }
+
 
 // ─── K-means++ initialization ─────────────────────────────────────────────────
 function kmeanspp(samples, k) {
