@@ -1510,21 +1510,26 @@ function rebuildPBNLines(thickness, skipRender) {
   const lines = new Uint8ClampedArray(n * 4);
 
   if (thickness === 0) {
-    // No border: all white
+    // Cap: no border
     for (let i = 0; i < n * 4; i += 4) { lines[i]=255; lines[i+1]=255; lines[i+2]=255; lines[i+3]=255; }
   } else {
-    // thickness 1→1px, 2→2px, 3→3px (check further neighbours)
-    const t = thickness; // pixels to check
     const borderSet = new Uint8Array(n);
     for (let y = 0; y < h; y++) {
       for (let x = 0; x < w; x++) {
-        const label = pbnLabels[y*w+x];
-        outer: for (let dy = 0; dy <= t; dy++) {
-          for (let dx = (dy===0?1:0); dx <= t; dx++) {
-            if (dy===0&&dx===0) continue;
-            const nx = x+dx, ny = y+dy;
-            if (nx < w && pbnLabels[ny*w+nx] !== label) { borderSet[y*w+x]=1; break outer; }
-            if (ny < h && pbnLabels[(y+dy)*w+x] !== label) { borderSet[y*w+x]=1; break outer; }
+        const i = y*w+x, label = pbnLabels[i];
+        if (thickness === 1) {
+          // Prim: only right + bottom neighbour — single-pixel hairline, very subtle
+          if ((x<w-1 && pbnLabels[i+1]!==label) || (y<h-1 && pbnLabels[i+w]!==label))
+            borderSet[i] = 1;
+        } else {
+          // Mitjà (t=1 with diagonals) or Gruixut (t=2)
+          const t = thickness - 1; // Mitjà→t=1, Gruixut→t=2
+          outer: for (let dy = 0; dy <= t; dy++) {
+            for (let dx = (dy===0?1:0); dx <= t; dx++) {
+              const nx = x+dx, ny = y+dy;
+              if (nx < w && pbnLabels[ny*w+nx] !== label) { borderSet[i]=1; break outer; }
+              if (ny < h && pbnLabels[(y+dy)*w+x] !== label) { borderSet[i]=1; break outer; }
+            }
           }
         }
       }
