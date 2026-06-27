@@ -526,14 +526,20 @@
 
       <div class="modal-option opt-bw" onclick="event.stopPropagation()">
         <canvas id="previewBW" width="140" height="105"></canvas>
-        <strong>Blanc i negre</strong>
-        <small>Converteix a línies netes. Ideal per dibuixos de colorar.</small>
+        <strong>Zones de colorar</strong>
+        <small>Divideix la imatge en zones per colorar lliurement.</small>
         <div class="pbn-config" onclick="event.stopPropagation()">
           <label>
-            Llindar:
-            <input type="range" id="bwThresh" min="10" max="245" value="128"
-                   oninput="document.getElementById('bwThreshVal').textContent=this.value;updateBWPreview()">
-            <span class="kval" id="bwThreshVal">128</span>
+            Resolució:
+            <input type="range" id="bwK" min="4" max="24" value="12"
+                   oninput="document.getElementById('bwKVal').textContent=this.value">
+            <span class="kval" id="bwKVal">12</span>
+          </label>
+          <label>
+            Contorn:
+            <input type="range" id="bwBorderThick" min="0" max="3" value="1"
+                   oninput="document.getElementById('bwBorderThickVal').textContent=['Cap','Prim','Mitjà','Gruixut'][+this.value]">
+            <span class="kval" id="bwBorderThickVal">Prim</span>
           </label>
         </div>
         <button class="confirm-btn" style="background:#4f8ef7;color:#fff;" onclick="confirmMode('bw')">Començar ▶</button>
@@ -649,6 +655,9 @@ let pbnColors        = null; // [[r,g,b], ...] — quantized color palette
 let pbnRegions       = null; // [{colorIdx, cx, cy, size}, ...]
 let pbnWhiteUnfilled = false; // show white instead of pastel hint for unfilled regions
 let pbnHighlightIdx  = -1;   // label index being highlighted (-1 = none)
+
+// BW-regions mode (shares pbnLabels/pbnColors infrastructure)
+let bwBorderThick = 1; // current border thickness for BW regions mode
 
 // ─── Zoom / Pan ───────────────────────────────────────────────────────────────
 let zoom = 1, panX = 0, panY = 0;
@@ -1020,7 +1029,7 @@ function loadImageFromURL(url) {
 
 // ─── Mode modal ────────────────────────────────────────────────────────────────
 function showModeModal(raw) {
-  renderPreview(document.getElementById('previewBW'),   raw, 'bw');
+  renderPreview(document.getElementById('previewBW'),   raw, 'original');
   renderPreview(document.getElementById('previewOrig'), raw, 'original');
   document.getElementById('modeModal').classList.add('active');
 }
@@ -1035,23 +1044,8 @@ function renderPreview(previewCanvas, raw, mode, thresh) {
   tmp.width = raw.w; tmp.height = raw.h;
   tmp.getContext('2d').putImageData(raw.data, 0, 0);
   pCtx.drawImage(tmp, 0, 0, dw, dh);
-  if (mode === 'bw') {
-    const t = thresh !== undefined ? thresh : 128;
-    const id = pCtx.getImageData(0, 0, dw, dh);
-    for (let i = 0; i < dw*dh; i++) {
-      const g = 0.299*id.data[i*4] + 0.587*id.data[i*4+1] + 0.114*id.data[i*4+2];
-      const v = g < t ? 0 : 255;
-      id.data[i*4] = id.data[i*4+1] = id.data[i*4+2] = v; id.data[i*4+3] = 255;
-    }
-    pCtx.putImageData(id, 0, 0);
-  }
 }
 
-function updateBWPreview() {
-  if (!pendingRaw) return;
-  const t = parseInt(document.getElementById('bwThresh').value);
-  renderPreview(document.getElementById('previewBW'), pendingRaw, 'bw', t);
-}
 
 function confirmMode(mode) {
   document.getElementById('modeModal').classList.remove('active');
@@ -1059,71 +1053,107 @@ function confirmMode(mode) {
   if (mode === 'pbn') {
     const k = parseInt(document.getElementById('pbnK').value);
     startPBN(pendingRaw, k);
+  } else if (mode === 'bw') {
+    const k = parseInt(document.getElementById('bwK').value);
+    bwBorderThick = parseInt(document.getElementById('bwBorderThick').value);
+    startBWRegions(pendingRaw, k);
   } else {
-    const thresh = mode === 'bw' ? parseInt(document.getElementById('bwThresh').value) : 128;
-    applyModeAndStart(pendingRaw, mode, thresh);
+    applyModeAndStart(pendingRaw, mode);
   }
   pendingRaw = null;
 }
 
-// ─── B&W / Original modes ─────────────────────────────────────────────────────
-let bwThreshold = 128; // current BW threshold (stored for live recalculation)
-let bwSourceRaw = null; // original raw ImageData for BW recalculation
-
-function applyModeAndStart(raw, mode, thresh) {
-  bwThreshold = (mode === 'bw' && thresh !== undefined) ? thresh : 128;
-  if (mode === 'bw') bwSourceRaw = raw; else bwSourceRaw = null;
+// ─── Original mode ─────────────────────────────────────────────────────────────
+function applyModeAndStart(raw, mode) {
   showLoading('Processant línies...');
   setTimeout(() => {
     canvas.width = raw.w; canvas.height = raw.h;
-    pbnLabels = null; pbnColors = null; pbnRegions = null; pbnWhiteUnfilled = false; pbnHighlightIdx = -1; bwSourceRaw = null;
-    processImageBWOrOrig(raw.data, raw.w, raw.h, mode, bwThreshold);
-    finishLoad(raw.w, raw.h, mode === 'bw' ? '🖊 Blanc i negre' : '🌈 Original');
+    pbnLabels = null; pbnColors = null; pbnRegions = null; pbnWhiteUnfilled = false; pbnHighlightIdx = -1;
+    const src   = raw.data.data;
+    const lines = new Uint8ClampedArray(raw.w * raw.h * 4);
+    const colors = new Uint8ClampedArray(raw.w * raw.h * 4);
+    for (let i = 0; i < raw.w * raw.h; i++) {
+      lines[i*4] = src[i*4]; lines[i*4+1] = src[i*4+1]; lines[i*4+2] = src[i*4+2]; lines[i*4+3] = 255;
+      colors[i*4+3] = 0;
+    }
+    linesImageData = new ImageData(lines, raw.w, raw.h);
+    colorLayer     = new ImageData(colors, raw.w, raw.h);
+    renderCanvas();
+    finishLoad(raw.w, raw.h, '🌈 Original');
     buildDefaultPalette();
     document.getElementById('tolWrap').style.display = '';
     document.getElementById('pbnStats').style.display = 'none';
-    if (mode === 'bw') showBWThreshBar();
   }, 50);
 }
 
-function processImageBWOrOrig(rawData, w, h, mode, thresh) {
-  const t = (mode === 'bw' && thresh !== undefined) ? thresh : 128;
-  const src   = rawData.data;
-  const lines = new Uint8ClampedArray(w * h * 4);
-  const colors = new Uint8ClampedArray(w * h * 4);
-  for (let i = 0; i < w * h; i++) {
-    const r = src[i*4], g = src[i*4+1], b = src[i*4+2];
-    const gray = 0.299*r + 0.587*g + 0.114*b;
-    lines[i*4]   = mode === 'bw' ? (gray < t ? 0 : 255) : r;
-    lines[i*4+1] = mode === 'bw' ? (gray < t ? 0 : 255) : g;
-    lines[i*4+2] = mode === 'bw' ? (gray < t ? 0 : 255) : b;
-    lines[i*4+3] = 255;
-    colors[i*4+3] = 0;
-  }
-  linesImageData = new ImageData(lines, w, h);
-  colorLayer     = new ImageData(colors, w, h);
-  renderCanvas();
+// ─── BW Regions mode (k-means segmentation, free coloring) ──────────────────
+function startBWRegions(raw, k) {
+  showLoading(`Analitzant zones (${k} regions)…`);
+  document.getElementById('pbnProgress').style.display = 'block';
+  document.getElementById('pbnProgressBar').style.width = '0%';
+
+  if (pbnWorker) { pbnWorker.terminate(); pbnWorker = null; }
+
+  const blob = new Blob([PBN_WORKER_SRC], { type: 'application/javascript' });
+  pbnWorker = new Worker(URL.createObjectURL(blob));
+
+  pbnWorker.onmessage = e => {
+    const msg = e.data;
+    if (msg.type === 'progress') {
+      setProgress(msg.pct);
+      document.getElementById('loadingMsg').textContent = msg.msg;
+    } else if (msg.type === 'done') {
+      pbnWorker = null;
+      onBWRegionsDone(raw.w, raw.h, k, msg);
+    }
+  };
+  pbnWorker.onerror = err => {
+    console.error('[Worker BW] error:', err);
+    pbnWorker = null;
+    hideLoading();
+    alert('Error processant la imatge. Torna a intentar-ho.');
+  };
+
+  const dataCopy = new Uint8ClampedArray(raw.data.data.buffer.slice(0));
+  pbnWorker.postMessage({ data: dataCopy, w: raw.w, h: raw.h, k }, [dataCopy.buffer]);
 }
 
-function showBWThreshBar() {
+function onBWRegionsDone(w, h, k, msg) {
+  canvas.width = w; canvas.height = h;
+  pbnColors  = msg.colors;
+  pbnLabels  = new Uint8Array(msg.labels);
+  pbnRegions = msg.regions;
+
+  const lines = new Uint8ClampedArray(msg.lines);
+  linesImageData = new ImageData(lines, w, h);
+  colorLayer     = new ImageData(new Uint8ClampedArray(w * h * 4), w, h);
+
+  // Apply chosen border thickness
+  if (bwBorderThick !== 1) rebuildPBNLines(bwBorderThick, true);
+
+  setProgress(98);
+  renderCanvas();
+  setProgress(100);
+
+  document.getElementById('pbnProgress').style.display = 'none';
+  finishLoad(w, h, '🖊 Zones de colorar');
+  buildDefaultPalette();
+  document.getElementById('tolWrap').style.display = '';
+  buildBWStatsBar(k, pbnRegions.filter(r => r.size >= PBN_MIN_LABEL_SIZE).length);
+}
+
+function buildBWStatsBar(numZones, visibleZones) {
   const statsEl = document.getElementById('pbnStats');
+  const thickLabels = ['Cap','Prim','Mitjà','Gruixut'];
   statsEl.style.display = 'flex';
   statsEl.innerHTML = `
-    <label style="display:flex;align-items:center;gap:6px;font-size:0.78rem;color:#555;">
-      Llindar B/N:
-      <input type="range" id="bwThreshLive" min="10" max="245" value="${bwThreshold}" style="width:90px;"
-             oninput="applyBWThreshLive(+this.value)">
-      <span id="bwThreshLiveVal">${bwThreshold}</span>
+    <span>${visibleZones} zones · </span>
+    <label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;color:#555;">
+      Contorn:
+      <input type="range" id="pbnBorderLive" min="0" max="3" value="${bwBorderThick}" style="width:70px;"
+             oninput="bwBorderThick=+this.value;document.getElementById('pbnBorderLiveVal').textContent=['Cap','Prim','Mitjà','Gruixut'][+this.value];rebuildPBNLines(+this.value)">
+      <span id="pbnBorderLiveVal">${thickLabels[bwBorderThick]}</span>
     </label>`;
-}
-
-function applyBWThreshLive(t) {
-  bwThreshold = t;
-  document.getElementById('bwThreshLiveVal').textContent = t;
-  if (!bwSourceRaw) return;
-  undoStack = []; redoStack = []; // threshold change resets undo history
-  processImageBWOrOrig(bwSourceRaw.data, bwSourceRaw.w, bwSourceRaw.h, 'bw', t);
-  scheduleAutosave();
 }
 
 // ─── Paint-by-numbers ─────────────────────────────────────────────────────────
@@ -1692,15 +1722,10 @@ function renderCanvas() {
   for (let i = 0; i < w * h; i++) {
     const li = i * 4;
 
-    // PBN borders are drawn on the overlay canvas (zoom-invariant), not here
-    let isInk;
-    if (currentMode === 'bw') {
-      isInk = l[li] === 0 && l[li+3] === 255;
-    } else if (currentMode === 'pbn') {
-      isInk = false;
-    } else {
-      isInk = (0.299*l[li] + 0.587*l[li+1] + 0.114*l[li+2]) < 128;
-    }
+    // Borders for pbn and bw are on the overlay canvas (zoom-invariant), not here
+    const isInk = currentMode === 'original'
+      ? (0.299*l[li] + 0.587*l[li+1] + 0.114*l[li+2]) < 128
+      : false;
 
     if (isInk) {
       o[li] = 0; o[li+1] = 0; o[li+2] = 0; o[li+3] = 255;
@@ -1712,18 +1737,27 @@ function renderCanvas() {
       } else if (currentMode === 'pbn') {
         const label = pbnLabels[i];
         if (pbnHighlightIdx >= 0 && label === pbnHighlightIdx) {
-          // Highlighted region: show full saturated color
           const [r,g,b] = pbnColors[label];
           o[li]   = Math.round(r); o[li+1] = Math.round(g); o[li+2] = Math.round(b); o[li+3] = 255;
         } else if (pbnWhiteUnfilled) {
           o[li] = 255; o[li+1] = 255; o[li+2] = 255; o[li+3] = 255;
         } else {
-          // Pastel hint
           const [r,g,b] = pbnColors[label];
           o[li]   = Math.round(r * 0.35 + 255 * 0.65);
           o[li+1] = Math.round(g * 0.35 + 255 * 0.65);
           o[li+2] = Math.round(b * 0.35 + 255 * 0.65);
           o[li+3] = 255;
+        }
+      } else if (currentMode === 'bw') {
+        // BW regions: white if border visible, pastel if no border
+        if (bwBorderThick === 0) {
+          const [r,g,b] = pbnColors[pbnLabels[i]];
+          o[li]   = Math.round(r * 0.35 + 255 * 0.65);
+          o[li+1] = Math.round(g * 0.35 + 255 * 0.65);
+          o[li+2] = Math.round(b * 0.35 + 255 * 0.65);
+          o[li+3] = 255;
+        } else {
+          o[li] = 255; o[li+1] = 255; o[li+2] = 255; o[li+3] = 255;
         }
       } else {
         o[li] = 255; o[li+1] = 255; o[li+2] = 255; o[li+3] = 255;
@@ -1733,13 +1767,14 @@ function renderCanvas() {
   ctx.putImageData(out, 0, 0);
 
   if (currentMode === 'pbn' && pbnRegions) drawPBNNumbers();
+  // BW mode: no numbers, borders handled by overlay only
   renderBorderOverlay();
 }
 
 // ─── Border overlay (zoom-invariant PBN borders) ─────────────────────────────
 function renderBorderOverlay() {
   const overlay = document.getElementById('borderOverlay');
-  if (currentMode !== 'pbn' || !pbnLabels || !linesImageData) {
+  if ((currentMode !== 'pbn' && currentMode !== 'bw') || !pbnLabels || !linesImageData) {
     overlay.style.display = 'none';
     return;
   }
@@ -1828,11 +1863,9 @@ function handleCanvasClick(e) {
 
   const li = (y * canvas.width + x) * 4;
   const l  = linesImageData.data;
-  const isInk = currentMode === 'bw'
-    ? (l[li] === 0 && l[li+3] === 255)
-    : (currentMode === 'pbn'
-      ? (l[li] === 0 && l[li+1] === 0 && l[li+2] === 0 && l[li+3] === 255)
-      : (0.299*l[li] + 0.587*l[li+1] + 0.114*l[li+2]) < 128);
+  const isInk = currentMode === 'original'
+    ? (0.299*l[li] + 0.587*l[li+1] + 0.114*l[li+2]) < 128
+    : false;
   if (isInk) return;
 
   // En mode PBN, comprova que el label de la zona coincideix amb el color seleccionat
@@ -1874,12 +1907,12 @@ function floodFill(startX, startY, colorHex) {
   if (colorHex && targetA === 255 && targetR === fillR && targetG === fillG && targetB === fillB) return;
   if (!colorHex && targetA === 0) return;
 
-  const usePBNFill = currentMode === 'pbn' && pbnLabels;
+  const useLabelFill = (currentMode === 'pbn' || currentMode === 'bw') && pbnLabels;
 
   const visited = new Uint8Array(w * h);
   const queue   = [startX + startY * w];
   visited[queue[0]] = 1;
-  const startLabel = usePBNFill ? pbnLabels[queue[0]] : -1;
+  const startLabel = useLabelFill ? pbnLabels[queue[0]] : -1;
 
   while (queue.length) {
     const pos = queue.pop();
@@ -1891,17 +1924,14 @@ function floodFill(startX, startY, colorHex) {
       if (n < 0 || visited[n]) continue;
       visited[n] = 1;
 
-      const ni = n * 4;
-      const ink = currentMode === 'bw'
-        ? (l[ni] === 0 && l[ni+3] === 255)
-        : (currentMode === 'pbn'
-          ? (l[ni] === 0 && l[ni+1] === 0 && l[ni+2] === 0 && l[ni+3] === 255)
-          : (0.299*l[ni] + 0.587*l[ni+1] + 0.114*l[ni+2]) < 128);
-      if (ink) continue;
-
-      if (usePBNFill) {
+      if (useLabelFill) {
         if (pbnLabels[n] === startLabel) queue.push(n);
       } else {
+        const ni = n * 4;
+        const ink = currentMode === 'original'
+          ? (0.299*l[ni] + 0.587*l[ni+1] + 0.114*l[ni+2]) < 128
+          : false;
+        if (ink) continue;
         const dist = Math.abs(c[ni]-targetR) + Math.abs(c[ni+1]-targetG)
                    + Math.abs(c[ni+2]-targetB) + Math.abs(c[ni+3]-targetA);
         if (dist <= tolerance * 4) queue.push(n);
@@ -1966,7 +1996,7 @@ function hideLoading() {
 }
 
 // ─── Auto-save ────────────────────────────────────────────────────────────────
-const LS_KEY = 'colorar_session_v3';
+const LS_KEY = 'colorar_session_v4';
 let saveTimer = null, saveIndicatorTimer = null;
 
 function imageDataToURL(imageData) {
@@ -1985,11 +2015,10 @@ function doAutosave() {
   if (!linesImageData || !colorLayer) return;
   try {
     let payload;
-    if (currentMode === 'pbn' && pbnColors && pbnLabels && pbnRegions) {
-      // PBN: save labels + color palette + fill map (no PNG, avoids color-space issues)
+    if ((currentMode === 'pbn' || currentMode === 'bw') && pbnColors && pbnLabels && pbnRegions) {
+      // PBN / BW-regions: save labels + color palette + fill map (no PNG)
       let binStr = '';
       for (let i = 0; i < pbnLabels.length; i++) binStr += String.fromCharCode(pbnLabels[i]);
-      // Build fill map: which label has been painted with which color
       const fillMap = {};
       const c = colorLayer.data;
       for (let i = 0; i < pbnLabels.length; i++) {
@@ -2001,21 +2030,22 @@ function doAutosave() {
           }
         }
       }
+      const thick = document.getElementById('pbnBorderLive') ? +document.getElementById('pbnBorderLive').value
+                  : (currentMode === 'bw' ? bwBorderThick : 1);
       payload = {
-        mode: 'pbn', w: canvas.width, h: canvas.height,
+        mode: currentMode, w: canvas.width, h: canvas.height,
         pbnColors:  pbnColors,
         pbnRegions: pbnRegions.filter(r => r.size >= PBN_MIN_LABEL_SIZE),
         pbnLabels:  btoa(binStr),
-        pbnBorderThick: document.getElementById('pbnBorderLive') ? +document.getElementById('pbnBorderLive').value : 1,
+        pbnBorderThick: thick,
         pbnFillMap: fillMap,
       };
     } else {
-      // BW / original: save image layers as PNG
+      // original: save image layers as PNG
       payload = {
         mode: currentMode, w: canvas.width, h: canvas.height,
         lines:  imageDataToURL(linesImageData),
         colors: imageDataToURL(colorLayer),
-        bwThreshold: currentMode === 'bw' ? bwThreshold : undefined,
       };
     }
     localStorage.setItem(LS_KEY, JSON.stringify(payload));
@@ -2056,18 +2086,17 @@ async function restoreSession() {
     canvas.width = w; canvas.height = h;
     currentMode = mode;
 
-    if (mode === 'pbn' && saved.pbnColors && saved.pbnLabels) {
-      // ── PBN restore ──────────────────────────────────────────────────────────
+    if ((mode === 'pbn' || mode === 'bw') && saved.pbnColors && saved.pbnLabels) {
+      // ── PBN / BW-regions restore ─────────────────────────────────────────────
       pbnColors  = saved.pbnColors;
       pbnRegions = saved.pbnRegions || [];
       const binStr = atob(saved.pbnLabels);
       pbnLabels = new Uint8Array(binStr.length);
       for (let i = 0; i < binStr.length; i++) pbnLabels[i] = binStr.charCodeAt(i);
 
-      // Reconstruct colorLayer (empty) and linesImageData from labels
       colorLayer = new ImageData(new Uint8ClampedArray(w * h * 4), w, h);
       const thick = saved.pbnBorderThick !== undefined ? saved.pbnBorderThick : 1;
-      rebuildPBNLines(thick, true); // skipRender: colorLayer fill map not applied yet
+      rebuildPBNLines(thick, true);
       if (saved.pbnFillMap) {
         const c = colorLayer.data;
         const fillMap = saved.pbnFillMap;
@@ -2081,37 +2110,37 @@ async function restoreSession() {
         }
       }
 
-      buildPBNPalette(pbnColors);
-      document.getElementById('tolWrap').style.display = 'none';
-      buildPBNStatsBar(pbnColors.length, pbnRegions.length);
-      // Set live border slider to saved value
+      if (mode === 'pbn') {
+        buildPBNPalette(pbnColors);
+        document.getElementById('tolWrap').style.display = 'none';
+        buildPBNStatsBar(pbnColors.length, pbnRegions.length);
+        const firstSwatch = document.querySelector('.pbn-swatch');
+        if (firstSwatch) firstSwatch.click();
+      } else {
+        bwBorderThick = thick;
+        buildDefaultPalette();
+        document.getElementById('tolWrap').style.display = '';
+        buildBWStatsBar(pbnColors.length, pbnRegions.length);
+      }
+
       const liveSlider = document.getElementById('pbnBorderLive');
       if (liveSlider) {
         liveSlider.value = thick;
         const thickLabels = ['Cap','Prim','Mitjà','Gruixut'];
         document.getElementById('pbnBorderLiveVal').textContent = thickLabels[thick];
       }
-      const firstSwatch = document.querySelector('.pbn-swatch');
-      if (firstSwatch) firstSwatch.click();
     } else {
-      // ── BW / original restore ─────────────────────────────────────────────────
+      // ── original restore ──────────────────────────────────────────────────────
       linesImageData = await dataURLtoImageData(saved.lines, w, h);
       colorLayer     = await dataURLtoImageData(saved.colors, w, h);
       buildDefaultPalette();
       document.getElementById('tolWrap').style.display = '';
-      pbnLabels = null; pbnColors = null; pbnRegions = null; pbnWhiteUnfilled = false; pbnHighlightIdx = -1; bwSourceRaw = null;
-      if (mode === 'bw' && saved.bwThreshold) {
-        bwThreshold = saved.bwThreshold;
-        showBWThreshBar();
-        document.getElementById('bwThreshLive').value = bwThreshold;
-        document.getElementById('bwThreshLiveVal').textContent = bwThreshold;
-      } else {
-        document.getElementById('pbnStats').style.display = 'none';
-      }
+      pbnLabels = null; pbnColors = null; pbnRegions = null; pbnWhiteUnfilled = false; pbnHighlightIdx = -1;
+      document.getElementById('pbnStats').style.display = 'none';
     }
 
     renderCanvas();
-    finishLoad(w, h, mode === 'bw' ? '🖊 Blanc i negre' : mode === 'pbn' ? '🔢 Pintar per números' : '🌈 Original');
+    finishLoad(w, h, mode === 'bw' ? '🖊 Zones de colorar' : mode === 'pbn' ? '🔢 Pintar per números' : '🌈 Original');
     undoStack = []; redoStack = [];
   } catch(e) {
     hideLoading();
