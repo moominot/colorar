@@ -633,9 +633,11 @@ let redoStack      = [];
 let pendingRaw     = null; // { data:ImageData, w, h }
 
 // PBN-specific state
-let pbnLabels   = null; // Uint8Array(w*h) — color index per pixel
-let pbnColors   = null; // [[r,g,b], ...] — quantized color palette
-let pbnRegions  = null; // [{colorIdx, cx, cy, size}, ...]
+let pbnLabels        = null; // Uint8Array(w*h) — color index per pixel
+let pbnColors        = null; // [[r,g,b], ...] — quantized color palette
+let pbnRegions       = null; // [{colorIdx, cx, cy, size}, ...]
+let pbnWhiteUnfilled = false; // show white instead of pastel hint for unfilled regions
+let pbnHighlightIdx  = -1;   // label index being highlighted (-1 = none)
 
 // ─── Zoom / Pan ───────────────────────────────────────────────────────────────
 let zoom = 1, panX = 0, panY = 0;
@@ -999,7 +1001,7 @@ function applyModeAndStart(raw, mode) {
   showLoading('Processant línies...');
   setTimeout(() => {
     canvas.width = raw.w; canvas.height = raw.h;
-    pbnLabels = null; pbnColors = null; pbnRegions = null;
+    pbnLabels = null; pbnColors = null; pbnRegions = null; pbnWhiteUnfilled = false; pbnHighlightIdx = -1;
     processImageBWOrOrig(raw.data, raw.w, raw.h, mode);
     finishLoad(raw.w, raw.h, mode === 'bw' ? '🖊 Blanc i negre' : '🌈 Original');
     buildDefaultPalette();
@@ -1363,6 +1365,11 @@ function buildPBNStatsBar(numColors, numZones) {
              oninput="document.getElementById('pbnBorderLiveVal').textContent=['Cap','Prim','Mitjà','Gruixut'][+this.value];rebuildPBNLines(+this.value)">
       <span id="pbnBorderLiveVal">${thickLabels[thick]}</span>
     </label>
+    <label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;color:#555;cursor:pointer;">
+      <input type="checkbox" id="pbnWhiteCheck" ${pbnWhiteUnfilled?'checked':''} onchange="pbnWhiteUnfilled=this.checked;renderCanvas()">
+      Blanc
+    </label>
+    <button class="btn btn-secondary" style="font-size:0.78rem;padding:5px 10px;" onclick="highlightPBNColor()" title="Il·luminar les zones del color seleccionat">💡</button>
     <button class="btn btn-secondary" style="font-size:0.78rem;padding:5px 10px;" onclick="solvePBN()">✨ Resoldre</button>`;
 }
 
@@ -1545,6 +1552,20 @@ function rebuildPBNLines(thickness, skipRender) {
   if (!skipRender) renderCanvas();
 }
 
+// ─── PBN Highlight selected color ────────────────────────────────────────────
+let highlightTimer = null;
+
+function highlightPBNColor() {
+  if (selectedPBNIdx < 0 || !pbnLabels) return;
+  clearTimeout(highlightTimer);
+  pbnHighlightIdx = selectedPBNIdx;
+  renderCanvas();
+  highlightTimer = setTimeout(() => {
+    pbnHighlightIdx = -1;
+    renderCanvas();
+  }, 1500);
+}
+
 // ─── PBN Solve ────────────────────────────────────────────────────────────────
 function solvePBN() {
   if (!pbnLabels || !pbnColors) return;
@@ -1590,12 +1611,21 @@ function renderCanvas() {
       if (currentMode === 'original') {
         o[li] = l[li]; o[li+1] = l[li+1]; o[li+2] = l[li+2]; o[li+3] = 255;
       } else if (currentMode === 'pbn') {
-        // Show a clearly visible pastel version of the target colour
-        const [r,g,b] = pbnColors[pbnLabels[i]];
-        o[li]   = Math.round(r * 0.35 + 255 * 0.65);
-        o[li+1] = Math.round(g * 0.35 + 255 * 0.65);
-        o[li+2] = Math.round(b * 0.35 + 255 * 0.65);
-        o[li+3] = 255;
+        const label = pbnLabels[i];
+        if (pbnHighlightIdx >= 0 && label === pbnHighlightIdx) {
+          // Highlighted region: show full saturated color
+          const [r,g,b] = pbnColors[label];
+          o[li]   = Math.round(r); o[li+1] = Math.round(g); o[li+2] = Math.round(b); o[li+3] = 255;
+        } else if (pbnWhiteUnfilled) {
+          o[li] = 255; o[li+1] = 255; o[li+2] = 255; o[li+3] = 255;
+        } else {
+          // Pastel hint
+          const [r,g,b] = pbnColors[label];
+          o[li]   = Math.round(r * 0.35 + 255 * 0.65);
+          o[li+1] = Math.round(g * 0.35 + 255 * 0.65);
+          o[li+2] = Math.round(b * 0.35 + 255 * 0.65);
+          o[li+3] = 255;
+        }
       } else {
         o[li] = 255; o[li+1] = 255; o[li+2] = 255; o[li+3] = 255;
       }
@@ -1927,7 +1957,7 @@ async function restoreSession() {
       buildDefaultPalette();
       document.getElementById('tolWrap').style.display = '';
       document.getElementById('pbnStats').style.display = 'none';
-      pbnLabels = null; pbnColors = null; pbnRegions = null;
+      pbnLabels = null; pbnColors = null; pbnRegions = null; pbnWhiteUnfilled = false; pbnHighlightIdx = -1;
     }
 
     renderCanvas();
