@@ -879,11 +879,19 @@ function pickColorAt(e) {
   const y = Math.floor((e.clientY - rect.top)  / scaleY);
   if (x < 0 || y < 0 || x >= canvas.width || y >= canvas.height) return;
 
-  // Read from rendered canvas
-  const px = ctx.getImageData(x, y, 1, 1).data;
-  const hex = '#' + [px[0], px[1], px[2]].map(v => v.toString(16).padStart(2,'0')).join('');
-  const rgb = `rgb(${px[0]},${px[1]},${px[2]})`;
-  showPickerTooltip(hex, `${hex.toUpperCase()}  ·  ${rgb}`, e.clientX, e.clientY);
+  if (currentMode === 'pbn' && pbnLabels && pbnColors) {
+    const label = pbnLabels[y * canvas.width + x];
+    const num = label + 1;
+    const [r, g, b] = pbnColors[label];
+    const ri = Math.round(r), gi = Math.round(g), bi = Math.round(b);
+    const hex = `#${[ri,gi,bi].map(v=>v.toString(16).padStart(2,'0')).join('')}`;
+    showPickerTooltip(hex, `Número ${num}`, e.clientX, e.clientY);
+  } else {
+    const px = ctx.getImageData(x, y, 1, 1).data;
+    const hex = '#' + [px[0], px[1], px[2]].map(v => v.toString(16).padStart(2,'0')).join('');
+    const rgb = `rgb(${px[0]},${px[1]},${px[2]})`;
+    showPickerTooltip(hex, `${hex.toUpperCase()}  ·  ${rgb}`, e.clientX, e.clientY);
+  }
 }
 
 document.getElementById('tolerance').addEventListener('input', function() {
