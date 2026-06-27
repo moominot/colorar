@@ -159,6 +159,66 @@
       padding-bottom: max(12px, env(safe-area-inset-bottom));
     }
 
+    /* Hamburger + Info buttons */
+    .icon-btn {
+      width: 36px; height: 36px; border: none; border-radius: 8px;
+      background: #e8edf3; color: #444; font-size: 1.1rem;
+      cursor: pointer; display: flex; align-items: center; justify-content: center;
+      touch-action: manipulation; flex-shrink: 0;
+    }
+    .icon-btn:hover { background: #d0d8e4; }
+    .icon-btn.active { background: #4f8ef7; color: #fff; }
+
+    /* Hamburger dropdown panel */
+    #hamburgerPanel {
+      display: none;
+      position: absolute; top: 100%; left: 0; right: 0;
+      background: #fff;
+      border-top: 1px solid #eee;
+      box-shadow: 0 6px 20px rgba(0,0,0,0.12);
+      z-index: 200;
+      padding: 10px 14px;
+      flex-direction: column;
+      gap: 8px;
+    }
+    #hamburgerPanel.open { display: flex; }
+    .ham-row {
+      display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    }
+    .ham-label {
+      font-size: 0.75rem; color: #888; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.04em;
+      min-width: 70px;
+    }
+    .ham-sep { width: 100%; height: 1px; background: #eee; margin: 2px 0; }
+
+    /* Info modal */
+    #infoModal {
+      display: none; position: fixed; inset: 0; z-index: 400;
+      background: rgba(0,0,0,0.45);
+      align-items: center; justify-content: center;
+      padding: 16px;
+    }
+    #infoModal.active { display: flex; }
+    #infoModal .modal-box { text-align: left; max-width: 480px; }
+    #infoModal .modal-box h2 { margin-bottom: 14px; }
+    #infoModal .info-section { margin-bottom: 12px; }
+    #infoModal .info-section h3 { font-size: 0.9rem; color: #444; margin-bottom: 6px; }
+    #infoModal .info-section p,
+    #infoModal .info-section li { font-size: 0.84rem; color: #555; line-height: 1.6; }
+    #infoModal .info-section ul { padding-left: 16px; }
+    #infoCurrentInfo {
+      background: #f0f4f8; border-radius: 8px; padding: 8px 12px;
+      font-size: 0.82rem; color: #666; margin-bottom: 14px;
+    }
+    .modal-close-btn {
+      display: block; width: 100%; margin-top: 14px;
+      padding: 9px; border: none; border-radius: 8px;
+      background: #4f8ef7; color: #fff;
+      font-weight: 700; font-size: 0.9rem; cursor: pointer;
+    }
+    .modal-close-btn:hover { background: #3a75e0; }
+
     /* Mobile responsive */
     @media (max-width: 540px) {
       header h1 { font-size: 1rem; }
@@ -167,7 +227,13 @@
       .tol-label { display: none; }
       #tolerance { width: 55px; }
       .tool-sep { margin: 0 1px; }
+
+      /* On mobile: hide full toolbar, show icon buttons */
+      .toolbar { display: none; }
+      .header-icons { display: flex !important; }
     }
+    /* Desktop: hide icon buttons */
+    .header-icons { display: none; gap: 6px; align-items: center; }
 
     /* Restore banner */
     #restoreBanner {
@@ -319,7 +385,7 @@
 </head>
 <body>
 
-<header>
+<header style="position:relative;">
   <h1>🎨 Colorar</h1>
   <div class="toolbar">
     <button class="btn btn-primary" onclick="document.getElementById('fileInput').click()">📂 <span class="btn-label">Obrir</span></button>
@@ -339,6 +405,41 @@
       <span class="tol-label">Tolerància:</span>
       <input type="range" id="tolerance" min="0" max="128" value="32">
       <span id="toleranceVal">32</span>
+    </div>
+    <div class="tool-sep"></div>
+    <button class="icon-btn" onclick="openInfoModal()" title="Informació i ajuda">ℹ️</button>
+  </div>
+
+  <!-- Mobile icon buttons (shown only on small screens) -->
+  <div class="header-icons">
+    <button class="icon-btn" onclick="document.getElementById('fileInput').click()" title="Obrir imatge">📂</button>
+    <button class="icon-btn" id="hamburgerBtn" onclick="toggleHamburger()" title="Eines">☰</button>
+    <button class="icon-btn" onclick="openInfoModal()" title="Informació i ajuda">ℹ️</button>
+  </div>
+
+  <!-- Hamburger dropdown panel (mobile) -->
+  <div id="hamburgerPanel">
+    <div class="ham-row">
+      <span class="ham-label">Editar</span>
+      <button class="btn btn-secondary" onclick="undo();closeHamburger()">↩ Desfer</button>
+      <button class="btn btn-secondary" onclick="redo();closeHamburger()">↪ Refer</button>
+      <button class="btn btn-danger" onclick="clearColors();closeHamburger()">🗑 Esborrar</button>
+      <button class="btn btn-secondary" onclick="downloadImage();closeHamburger()">⬇ Desar</button>
+    </div>
+    <div class="ham-sep"></div>
+    <div class="ham-row">
+      <span class="ham-label">Zoom</span>
+      <div class="zoom-bar">
+        <button class="zoom-btn" onclick="zoomBy(-1)">−</button>
+        <span id="zoomLabelMobile" onclick="zoomFit()" style="min-width:44px;text-align:center;font-size:0.8rem;font-weight:600;color:#555;cursor:pointer;padding:3px 2px;border-radius:4px;">100%</span>
+        <button class="zoom-btn" onclick="zoomBy(+1)">+</button>
+      </div>
+    </div>
+    <div class="ham-sep"></div>
+    <div class="ham-row">
+      <span class="ham-label">Tolerància</span>
+      <input type="range" id="toleranceMobile" min="0" max="128" value="32" style="flex:1;min-width:80px;" oninput="syncTolerance(this.value)">
+      <span id="toleranceValMobile">32</span>
     </div>
   </div>
 </header>
@@ -429,6 +530,55 @@
   </div>
 </div>
 
+<!-- Info modal -->
+<div id="infoModal">
+  <div class="modal-box">
+    <h2>ℹ️ Com utilitzar Colorar</h2>
+    <div id="infoCurrent" style="display:none">
+      <div id="infoCurrentInfo"></div>
+    </div>
+    <div class="info-section">
+      <h3>📂 Obrir una imatge</h3>
+      <ul>
+        <li>Clica el botó <strong>📂 Obrir</strong> o arrossega una imatge a la pantalla</li>
+        <li>També pots enganxar (<strong>Ctrl+V</strong>) una imatge del portaretalls</li>
+      </ul>
+    </div>
+    <div class="info-section">
+      <h3>🖌 Colorar</h3>
+      <ul>
+        <li>Selecciona un color de la paleta i clica a la zona que vols omplir</li>
+        <li>La <strong>tolerància</strong> controla quins píxels s'omplen (més alta = zones més grans)</li>
+        <li>Usa la <strong>goma (✕)</strong> per esborrar zones pintades</li>
+      </ul>
+    </div>
+    <div class="info-section">
+      <h3>🔢 Pintar per números</h3>
+      <ul>
+        <li>Tria un número de color de la llista i clica la zona corresponent</li>
+        <li>Omplir una zona amb el número equivocat no té efecte</li>
+      </ul>
+    </div>
+    <div class="info-section">
+      <h3>🔍 Zoom i navegació</h3>
+      <ul>
+        <li><strong>Roda del ratolí</strong> o botons <strong>− +</strong> per fer zoom</li>
+        <li><strong>2 dits</strong> per fer zoom al mòbil</li>
+        <li><strong>1 dit</strong> per moure la imatge (pan)</li>
+        <li>Clica el percentatge per ajustar a pantalla</li>
+      </ul>
+    </div>
+    <div class="info-section">
+      <h3>💾 Desar</h3>
+      <ul>
+        <li>La sessió es desa automàticament al navegador</li>
+        <li>Usa <strong>⬇ Desar</strong> per exportar la imatge com a PNG</li>
+      </ul>
+    </div>
+    <button class="modal-close-btn" onclick="closeInfoModal()">Tancar</button>
+  </div>
+</div>
+
 <script>
 // ─── Constants ────────────────────────────────────────────────────────────────
 const DEFAULT_PALETTE = [
@@ -467,7 +617,10 @@ function applyTransform() {
   wrapper.style.transform = `scale(${zoom})`;
   wrapper.style.left = panX + 'px';
   wrapper.style.top  = panY + 'px';
-  document.getElementById('zoomLabel').textContent = Math.round(zoom * 100) + '%';
+  const pct = Math.round(zoom * 100) + '%';
+  document.getElementById('zoomLabel').textContent = pct;
+  const lm = document.getElementById('zoomLabelMobile');
+  if (lm) lm.textContent = pct;
 }
 
 function clampPan() {
@@ -653,9 +806,16 @@ function selectEraser() {
 }
 
 document.getElementById('tolerance').addEventListener('input', function() {
-  tolerance = +this.value;
-  document.getElementById('toleranceVal').textContent = tolerance;
+  syncTolerance(this.value);
 });
+
+function syncTolerance(val) {
+  tolerance = +val;
+  document.getElementById('tolerance').value = val;
+  document.getElementById('toleranceVal').textContent = val;
+  const tm = document.getElementById('toleranceMobile');
+  if (tm) { tm.value = val; document.getElementById('toleranceValMobile').textContent = val; }
+}
 
 // ─── File input / drag / paste ────────────────────────────────────────────────
 document.getElementById('fileInput').addEventListener('change', e => {
@@ -1575,6 +1735,51 @@ function checkSavedSession() {
     localStorage.removeItem(LS_KEY);
   }
 }
+
+// ─── Hamburger menu ───────────────────────────────────────────────────────────
+function toggleHamburger() {
+  const panel = document.getElementById('hamburgerPanel');
+  const btn   = document.getElementById('hamburgerBtn');
+  const open  = panel.classList.toggle('open');
+  btn.classList.toggle('active', open);
+}
+
+function closeHamburger() {
+  document.getElementById('hamburgerPanel').classList.remove('open');
+  document.getElementById('hamburgerBtn').classList.remove('active');
+}
+
+// Close hamburger when clicking outside
+document.addEventListener('click', function(e) {
+  const panel = document.getElementById('hamburgerPanel');
+  if (panel.classList.contains('open')) {
+    const header = document.querySelector('header');
+    if (!header.contains(e.target)) closeHamburger();
+  }
+});
+
+// ─── Info modal ───────────────────────────────────────────────────────────────
+function openInfoModal() {
+  closeHamburger();
+  const infoText = document.getElementById('infoBar').textContent;
+  const section  = document.getElementById('infoCurrent');
+  const infoEl   = document.getElementById('infoCurrentInfo');
+  if (infoText && !infoText.startsWith('Puja')) {
+    infoEl.textContent = infoText;
+    section.style.display = 'block';
+  } else {
+    section.style.display = 'none';
+  }
+  document.getElementById('infoModal').classList.add('active');
+}
+
+function closeInfoModal() {
+  document.getElementById('infoModal').classList.remove('active');
+}
+
+document.getElementById('infoModal').addEventListener('click', function(e) {
+  if (e.target === this) closeInfoModal();
+});
 
 // ─── PWA / Service Worker ─────────────────────────────────────────────────────
 if ('serviceWorker' in navigator) {
