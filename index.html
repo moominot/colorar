@@ -1340,25 +1340,30 @@ function onPBNDone(w, h, k, msg) {
   document.getElementById('tolWrap').style.display = 'none';
 
   const visibles = pbnRegions.filter(r => r.size >= PBN_MIN_LABEL_SIZE).length;
-  const statsEl = document.getElementById('pbnStats');
-  statsEl.style.display = 'flex';
-  const initThick = parseInt(document.getElementById('pbnBorderThick').value);
-  const thickLabels = ['Cap','Prim','Mitjà','Gruixut'];
-  statsEl.innerHTML = `
-    <span>${k} colors · ${visibles} zones · </span>
-    <label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;color:#555;">
-      Contorn:
-      <input type="range" id="pbnBorderLive" min="0" max="3" value="${initThick}" style="width:70px;"
-             oninput="document.getElementById('pbnBorderLiveVal').textContent=['Cap','Prim','Mitjà','Gruixut'][+this.value];rebuildPBNLines(+this.value)">
-      <span id="pbnBorderLiveVal">${thickLabels[initThick]}</span>
-    </label>
-    <button class="btn btn-secondary" style="font-size:0.78rem;padding:5px 10px;" onclick="solvePBN()">✨ Resoldre</button>`;
+  buildPBNStatsBar(k, visibles);
 
   // Apply initial border thickness (worker always sends 1px lines)
+  const initThick = parseInt(document.getElementById('pbnBorderThick').value);
   if (initThick !== 1) rebuildPBNLines(initThick);
 
   const firstSwatch = document.querySelector('.pbn-swatch');
   if (firstSwatch) firstSwatch.click();
+}
+
+function buildPBNStatsBar(numColors, numZones) {
+  const statsEl = document.getElementById('pbnStats');
+  const thick = document.getElementById('pbnBorderThick') ? parseInt(document.getElementById('pbnBorderThick').value) : 1;
+  const thickLabels = ['Cap','Prim','Mitjà','Gruixut'];
+  statsEl.style.display = 'flex';
+  statsEl.innerHTML = `
+    <span>${numColors} colors · ${numZones} zones · </span>
+    <label style="display:flex;align-items:center;gap:4px;font-size:0.78rem;color:#555;">
+      Contorn:
+      <input type="range" id="pbnBorderLive" min="0" max="3" value="${thick}" style="width:70px;"
+             oninput="document.getElementById('pbnBorderLiveVal').textContent=['Cap','Prim','Mitjà','Gruixut'][+this.value];rebuildPBNLines(+this.value)">
+      <span id="pbnBorderLiveVal">${thickLabels[thick]}</span>
+    </label>
+    <button class="btn btn-secondary" style="font-size:0.78rem;padding:5px 10px;" onclick="solvePBN()">✨ Resoldre</button>`;
 }
 
 
@@ -1810,7 +1815,10 @@ function doAutosave() {
     if (currentMode === 'pbn' && pbnColors && pbnLabels && pbnRegions) {
       payload.pbnColors  = pbnColors;
       payload.pbnRegions = pbnRegions.filter(r => r.size >= PBN_MIN_LABEL_SIZE);
-      payload.pbnLabels  = btoa(String.fromCharCode(...pbnLabels));
+      // Encode Uint8Array without spread (avoids stack overflow on large images)
+      let binStr = '';
+      for (let i = 0; i < pbnLabels.length; i++) binStr += String.fromCharCode(pbnLabels[i]);
+      payload.pbnLabels = btoa(binStr);
     }
     localStorage.setItem(LS_KEY, JSON.stringify(payload));
     flashSaveIndicator();
@@ -1860,9 +1868,9 @@ async function restoreSession() {
       for (let i = 0; i < binStr.length; i++) pbnLabels[i] = binStr.charCodeAt(i);
       buildPBNPalette(pbnColors);
       document.getElementById('tolWrap').style.display = 'none';
-      const statsEl = document.getElementById('pbnStats');
-      statsEl.style.display = 'block';
-      statsEl.textContent = `${pbnColors.length} colors · ${pbnRegions.length} zones · Selecciona un color i omple les zones del mateix número`;
+      buildPBNStatsBar(pbnColors.length, pbnRegions.length);
+      const firstSwatch = document.querySelector('.pbn-swatch');
+      if (firstSwatch) firstSwatch.click();
     } else {
       buildDefaultPalette();
       document.getElementById('tolWrap').style.display = '';
