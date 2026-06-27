@@ -776,8 +776,11 @@ function setProgress(pct) {
 function runPBN(raw, k) {
   const { data, w, h } = raw;
   canvas.width = w; canvas.height = h;
+  console.time('[PBN] total');
+  console.log(`[PBN] inici — imatge ${w}×${h} (${w*h} px), k=${k}`);
 
   setProgress(5);
+  console.time('[PBN] mostreig');
   const step = Math.max(1, Math.ceil(Math.sqrt(w * h / 60000)));
   const samples = [];
   for (let y = 0; y < h; y += step)
@@ -785,19 +788,32 @@ function runPBN(raw, k) {
       const i = (y * w + x) * 4;
       samples.push([data[i], data[i+1], data[i+2]]);
     }
+  console.timeEnd('[PBN] mostreig');
+  console.log(`[PBN] mostres: ${samples.length} (step=${step})`);
 
   setProgress(10);
+  console.time('[PBN] kmeans++');
   const centroids = kmeanspp(samples, k);
+  console.timeEnd('[PBN] kmeans++');
+
   setProgress(20);
-  const finalCentroids = kmeans(samples, centroids, 30, p => setProgress(20 + p * 0.4));
+  console.time('[PBN] kmeans iteracions');
+  const finalCentroids = kmeans(samples, centroids, 30, (p, iter) => {
+    setProgress(20 + p * 0.4);
+    if (iter !== undefined) console.log(`[PBN] kmeans iteració ${iter+1}/30`);
+  });
+  console.timeEnd('[PBN] kmeans iteracions');
 
   const sorted = sortColors(finalCentroids);
   pbnColors = sorted;
   setProgress(65);
 
+  console.time('[PBN] assignLabels');
   pbnLabels = assignLabels(data, w, h, sorted);
+  console.timeEnd('[PBN] assignLabels');
   setProgress(78);
 
+  console.time('[PBN] construcció línies');
   const lines  = new Uint8ClampedArray(w * h * 4);
   const colors = new Uint8ClampedArray(w * h * 4);
   for (let y = 0; y < h; y++) {
@@ -821,12 +837,19 @@ function runPBN(raw, k) {
   }
   linesImageData = new ImageData(lines, w, h);
   colorLayer     = new ImageData(colors, w, h);
+  console.timeEnd('[PBN] construcció línies');
   setProgress(88);
 
+  console.time('[PBN] regions connexes');
   pbnRegions = findRegionCenters(pbnLabels, w, h, k);
+  console.timeEnd('[PBN] regions connexes');
+  console.log(`[PBN] regions trobades: ${pbnRegions.length} (visibles ≥${PBN_MIN_LABEL_SIZE}px: ${pbnRegions.filter(r=>r.size>=PBN_MIN_LABEL_SIZE).length})`);
   setProgress(96);
 
+  console.time('[PBN] renderCanvas');
   renderCanvas();
+  console.timeEnd('[PBN] renderCanvas');
+  console.timeEnd('[PBN] total');
   setProgress(100);
 
   document.getElementById('pbnProgress').style.display = 'none';
@@ -872,6 +895,7 @@ function kmeans(samples, initCentroids, iterations, onProgress) {
   const k = centroids.length;
 
   for (let iter = 0; iter < iterations; iter++) {
+    const t0 = performance.now();
     const sums   = Array.from({length: k}, () => [0,0,0]);
     const counts = new Int32Array(k);
 
@@ -895,7 +919,9 @@ function kmeans(samples, initCentroids, iterations, onProgress) {
         centroids[j] = [nr, ng, nb];
       }
     }
-    onProgress((iter + 1) / iterations);
+    const ms = (performance.now() - t0).toFixed(1);
+    console.log(`[PBN] kmeans iter ${iter+1}: ${ms}ms${!moved ? ' — convergit, atura' : ''}`);
+    onProgress((iter + 1) / iterations, iter);
     if (!moved) break;
   }
   return centroids;
