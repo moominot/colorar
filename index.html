@@ -102,6 +102,20 @@
       display: flex; align-items: center; justify-content: center; font-size: 14px;
     }
     /* PBN numbered swatch */
+    .pbn-swatch-wrap {
+      width: 46px; height: 46px;
+      position: relative;
+      display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0;
+    }
+    .pbn-progress-ring {
+      position: absolute; top: 0; left: 0;
+      width: 46px; height: 46px;
+      transform: rotate(-90deg);
+      pointer-events: none;
+    }
+    .pbn-progress-ring .ring-track { fill: none; stroke: #e0e6ed; stroke-width: 3; }
+    .pbn-progress-ring .ring-fill  { fill: none; stroke: #34c759; stroke-width: 3; stroke-linecap: round; transition: stroke-dashoffset 0.25s; }
     .pbn-swatch {
       width: 40px; height: 40px;
       border-radius: 8px;
@@ -814,10 +828,31 @@ function buildPBNPalette(colors) {
 
   colors.forEach(([r,g,b], i) => {
     const ri = Math.round(r), gi = Math.round(g), bi = Math.round(b);
+
+    const wrap = document.createElement('div');
+    wrap.className = 'pbn-swatch-wrap';
+
+    const ringNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(ringNS, 'svg');
+    svg.setAttribute('class', 'pbn-progress-ring');
+    svg.setAttribute('viewBox', '0 0 46 46');
+    const track = document.createElementNS(ringNS, 'circle');
+    track.setAttribute('class', 'ring-track');
+    track.setAttribute('cx', '23'); track.setAttribute('cy', '23'); track.setAttribute('r', '20');
+    const fill = document.createElementNS(ringNS, 'circle');
+    fill.setAttribute('class', 'ring-fill');
+    fill.setAttribute('cx', '23'); fill.setAttribute('cy', '23'); fill.setAttribute('r', '20');
+    const circumference = 2 * Math.PI * 20;
+    fill.setAttribute('stroke-dasharray', circumference.toFixed(2));
+    fill.setAttribute('stroke-dashoffset', circumference.toFixed(2));
+    fill.dataset.circumference = circumference;
+    svg.appendChild(track);
+    svg.appendChild(fill);
+    wrap.appendChild(svg);
+
     const sw = document.createElement('div');
     sw.className = 'pbn-swatch';
     sw.style.background = `rgb(${ri},${gi},${bi})`;
-    sw.title = `Color ${i+1}`;
 
     const lum = 0.299*ri + 0.587*gi + 0.114*bi;
     const numEl = document.createElement('span');
@@ -835,10 +870,12 @@ function buildPBNPalette(colors) {
         selectPBNColor(i, sw, [ri, gi, bi]);
       }
     };
-    container.appendChild(sw);
+    wrap.appendChild(sw);
+    container.appendChild(wrap);
   });
 
   document.getElementById('eraserSwatch').style.display = '';
+  updatePBNProgressRings();
 }
 
 function selectColor(color, el) {
@@ -1773,6 +1810,30 @@ function renderCanvas() {
   if (currentMode === 'pbn' && pbnRegions) drawPBNNumbers();
   // BW mode: no numbers, borders handled by overlay only
   renderBorderOverlay();
+  if (currentMode === 'pbn') updatePBNProgressRings();
+}
+
+// ─── PBN palette progress rings ──────────────────────────────────────────────
+function updatePBNProgressRings() {
+  if (!pbnColors || !pbnRegions || !colorLayer) return;
+  const w = canvas.width;
+  const cData = colorLayer.data;
+  const totals = new Array(pbnColors.length).fill(0);
+  const filled = new Array(pbnColors.length).fill(0);
+  for (const r of pbnRegions) {
+    if (r.size < PBN_MIN_LABEL_SIZE) continue;
+    totals[r.colorIdx] += r.size;
+    const ci = (r.cy * w + r.cx) * 4;
+    if (cData[ci + 3] > 0) filled[r.colorIdx] += r.size;
+  }
+  document.querySelectorAll('.pbn-swatch-wrap').forEach(wrap => {
+    const ring = wrap.querySelector('.ring-fill');
+    const idx = +wrap.querySelector('.pbn-swatch').dataset.colorIdx;
+    if (!ring || totals[idx] === undefined) return;
+    const pct = totals[idx] > 0 ? filled[idx] / totals[idx] : 0;
+    const circumference = +ring.dataset.circumference;
+    ring.setAttribute('stroke-dashoffset', (circumference * (1 - pct)).toFixed(2));
+  });
 }
 
 // ─── Border overlay (zoom-invariant PBN borders) ─────────────────────────────
