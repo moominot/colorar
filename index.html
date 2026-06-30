@@ -231,6 +231,9 @@
       /* On mobile: hide full toolbar, show icon buttons */
       .toolbar { display: none; }
       .header-icons { display: flex !important; }
+
+      /* Info bar takes valuable vertical space on mobile; accessible via ℹ️ button instead */
+      #infoBar { display: none; }
     }
     /* Desktop: hide icon buttons */
     .header-icons { display: none; gap: 6px; align-items: center; }
